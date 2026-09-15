@@ -8,6 +8,10 @@ here.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [2.0.0] — 2026-09-15
+
 A hardening release: security fixes, several ways data could be lost, and a
 test suite. **If Deckle sits behind a reverse proxy, read the first item under
 Changed** — one new setting keeps sign-in throttling working as it should.
@@ -436,7 +440,8 @@ a command palette; light and dark mode with seven palettes; a responsive layout
 with drawers on a phone; and a token-authenticated REST API at `/api/v1`
 described by a self-served OpenAPI 3.1 document.
 
-[Unreleased]: https://github.com/authorTom/deckle/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/authorTom/deckle/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/authorTom/deckle/compare/v1.6.0...v2.0.0
 [1.6.0]: https://github.com/authorTom/deckle/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/authorTom/deckle/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/authorTom/deckle/compare/v1.4.0...v1.5.0
