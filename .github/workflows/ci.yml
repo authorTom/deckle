@@ -43,4 +43,9 @@ jobs:
       # fails if the two have drifted, which is the point of running it here.
       - run: npm ci
 
+      # The server through its real HTTP handler, the API, every storage path,
+      # the assistant's tools and autosave. Before the build, because a failing
+      # test says more about a change than a bundle that compiles.
+      - run: npm test
+
       - run: npm run build

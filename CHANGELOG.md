@@ -8,7 +8,95 @@ here.
 
 ## [Unreleased]
 
-Nothing yet.
+A hardening release: security fixes, several ways data could be lost, and a
+test suite. **If Deckle sits behind a reverse proxy, read the first item under
+Changed** — one new setting keeps sign-in throttling working as it should.
+
+### Security
+
+- **The assistant's API key could be read through the file API.** Shared
+  assistant settings live in `.deckle-state`, which the library API is meant
+  to refuse — but a path written as `./.deckle-state/assistant.json` got past
+  the check. Any path that resolves into that folder is now refused, including
+  other capitalisations on case-insensitive disks and a `DECKLE_STATE_DIR` set
+  somewhere else inside the library. Reaching it took a signed-in session, but
+  it also put the key within reach of the assistant's read-only tools.
+- **Password guessing was not really throttled.** Sign-in and API-token
+  throttling believed `X-Forwarded-For` from anyone, so a script could claim a
+  new address on every guess and never be locked out — or lock a real person
+  out by claiming theirs. The header is now ignored unless you set
+  `DECKLE_TRUST_PROXY`, and the number of addresses tracked is capped.
+- **Changing `DECKLE_PASSWORD` signs everyone out**, even with a fixed
+  `DECKLE_SESSION_SECRET`. Sessions issued under the old password used to stay
+  valid until they expired.
+- **One unreadable file could take the server down.** Downloading a note the
+  container isn't allowed to read — a root-owned file in a bind mount — crashed
+  the process for every user. That request now gets an error and nothing else
+  notices.
+- **A Content-Security-Policy on every response.** Only the app's own scripts
+  run, whatever finds its way into the page.
+- Bookmark links are drawn only for `http` and `https` URLs. A `javascript:`
+  URL in a synced or hand-edited `bookmarks.json` no longer runs when clicked.
+- A ZIP import can no longer exhaust the tab's memory by claiming small sizes
+  and inflating to gigabytes.
+- The assistant's file tools refuse `..` and absolute paths and won't write into
+  hidden folders, whatever the storage underneath would allow; its memory tools
+  can't climb out of the memory folder. A queued run's inbox fence no longer
+  counts `Assistant inbox/../Projects/plan.md` as inside the inbox.
+- Signing out requires the app's own request header, like every other
+  state-changing call, so another site can't sign you out.
+- Checking the password no longer reveals its length through timing.
+- Updated dependencies with published advisories (`linkify-it`, `postcss`,
+  `nanoid`, `browserslist`).
+
+### Changed
+
+- **`DECKLE_TRUST_PROXY` — set it to `true` behind Caddy, Traefik or nginx.**
+  Without it, Deckle now throttles by the address that connected, which behind
+  a proxy is the proxy: every visitor shares one counter, and ten wrong
+  passwords from anyone lock everyone out for fifteen minutes. For a chain of
+  proxies (Cloudflare in front of Caddy), give the number instead. See
+  [Security](README.md#security).
+- Completing a recurring task through `PATCH /api/v1/tasks/{id}` rolls its due
+  date forward, exactly as ticking it in the app does. It used to complete the
+  task and end the series.
+
+### Fixed
+
+- **Autosave could leave a note a paragraph behind the editor.** Two saves could
+  overlap whenever a write was slow — a server library on a slow link, or a save
+  that also took a history snapshot — and the older one could finish last,
+  while the indicator said *Saved*. Saves now happen strictly in order.
+- **Tasks and bookmarks could be replaced by an empty list.**
+  - A change made while `tasks.json` or `bookmarks.json` was still loading was
+    saved on its own, over the file. It is now applied to what loads.
+  - A file that wouldn't parse, or came from a newer Deckle, loaded as empty
+    and was overwritten by the next change. The app now keeps a copy first
+    (`.deckle/tasks.unreadable-<time>.json`), and the API refuses to write
+    over it with `500 store_unreadable`.
+  - Switching libraries with a change still pending now saves it to the library
+    it belongs to, rather than dropping it.
+- **Queued runs could lose their place with more than one running at once.**
+  Overlapping updates to the run index dropped rows or restored an old status,
+  and a run put back to *queued* could be executed twice.
+- `/api/v1`: a `PATCH` that renamed a note and carried an invalid edit moved the
+  note and then answered `400`; it now changes nothing. A body that is valid
+  JSON but not an object (`null`, `[]`) is a `400` rather than a `500`. Due dates
+  must be real calendar dates, project and collection colours must be hex, and
+  ids must be strings.
+- A malformed session cookie or login body is answered as such, not with a
+  `500`.
+- An export whose client disconnected mid-download stayed in memory for the life
+  of the process.
+- Saving shared assistant settings close to the size limit could be refused
+  because of the file's indentation, and two devices saving in the same moment
+  could fail.
+
+### Added
+
+- A test suite — `npm test` — covering the server through its real HTTP handler,
+  the API, every storage path, the queue, the assistant's tools and autosave. CI
+  runs it on every pull request.
 
 ## [1.6.0] — 2026-08-29
 

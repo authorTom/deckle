@@ -106,7 +106,7 @@ function isDestructive(name: string): boolean {
  * but "the assistant deleted something while I was making coffee" is not a
  * sentence worth the convenience.
  */
-function needsApproval(call: ToolCall, inbox: string): boolean {
+export function needsApproval(call: ToolCall, inbox: string): boolean {
   const def = toolByName(call.name)
   if (def?.readOnly || def?.autoApply) return false
   if (isDestructive(call.name)) return true

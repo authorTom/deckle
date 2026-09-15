@@ -59,9 +59,21 @@ export function clampConcurrency(value: unknown): number {
   return Math.min(MAX_CONCURRENCY, Math.max(1, n))
 }
 
-/** Is `path` the inbox folder, or inside it? */
+/**
+ * Is `path` the inbox folder, or inside it?
+ *
+ * This is the whole fence around writes a queued run makes unattended, so it
+ * judges the path as written and doesn't lean on a backend refusing it later:
+ * "Assistant inbox/../Projects/plan.md" starts with the inbox and is not in
+ * it. Any path that climbs, doubles back, or isn't a plain relative path gets
+ * "no", which only ever means "ask the person first".
+ */
 export function isInsideInbox(path: string, inbox: string): boolean {
   const folder = inbox.replace(/^\/+|\/+$/g, '')
   if (!folder) return false
+  if (path.includes('\\')) return false
+  if (path.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    return false
+  }
   return path === folder || path.startsWith(`${folder}/`)
 }

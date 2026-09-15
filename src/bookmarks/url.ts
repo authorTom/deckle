@@ -11,6 +11,23 @@ export function normalizeUrl(raw: string): string | null {
   }
 }
 
+/**
+ * A bookmark's URL if it is safe to put in an `href`, otherwise undefined.
+ *
+ * Bookmarks added in the app are normalised to http(s) on the way in, but the
+ * file they live in is a JSON file in the user's folder — synced, shared,
+ * edited by hand — and React renders a `javascript:` href as written. One click
+ * on such a link would run script with the app's access to the whole library.
+ */
+export function safeHttpUrl(url: string): string | undefined {
+  try {
+    const u = new URL(url)
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** Display domain, e.g. "https://www.amazon.co.uk/dp/X" → "amazon.co.uk". */
 export function domainOf(url: string): string {
   try {

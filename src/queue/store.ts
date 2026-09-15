@@ -86,6 +86,32 @@ async function saveIndex(
   await writeDataJson(dir, INDEX_FILE, index)
 }
 
+/**
+ * One index update at a time, per library.
+ *
+ * Every run saves after every turn, and with concurrency above one several do
+ * it at once. Each save is a read-modify-write of the whole index, so two that
+ * overlapped used to lose a row or put back a stale status — and a row that
+ * reverted to "queued" was picked up by the scheduler and run a second time.
+ * (This serialises one tab. Two tabs on one library can still interleave;
+ * the scheduler's re-read of the record before starting is the guard there.)
+ */
+const indexLocks = new WeakMap<FileSystemDirectoryHandle, Promise<unknown>>()
+
+function withIndexLock<T>(
+  dir: FileSystemDirectoryHandle,
+  task: () => Promise<T>,
+): Promise<T> {
+  const previous = indexLocks.get(dir) ?? Promise.resolve()
+  const run = previous.then(task, task)
+  // A failed update must not wedge every update behind it.
+  indexLocks.set(
+    dir,
+    run.catch(() => undefined),
+  )
+  return run
+}
+
 // ---- Records ----------------------------------------------------------------
 
 async function runsDir(
@@ -124,13 +150,15 @@ export async function saveRun(
   await writable.write(JSON.stringify(run, null, 2))
   await writable.close()
 
-  const index = await loadIndex(dir)
-  const summary = toSummary(run)
-  const at = index.runs.findIndex((r) => r.id === run.id)
-  if (at === -1) index.runs.unshift(summary)
-  else index.runs[at] = summary
+  await withIndexLock(dir, async () => {
+    const index = await loadIndex(dir)
+    const summary = toSummary(run)
+    const at = index.runs.findIndex((r) => r.id === run.id)
+    if (at === -1) index.runs.unshift(summary)
+    else index.runs[at] = summary
 
-  await saveIndex(dir, await prune(dir, index))
+    await saveIndex(dir, await prune(dir, index))
+  })
 }
 
 export async function deleteRun(
@@ -143,9 +171,11 @@ export async function deleteRun(
   } catch {
     // Already gone; still drop the row.
   }
-  const index = await loadIndex(dir)
-  index.runs = index.runs.filter((r) => r.id !== id)
-  await saveIndex(dir, index)
+  await withIndexLock(dir, async () => {
+    const index = await loadIndex(dir)
+    index.runs = index.runs.filter((r) => r.id !== id)
+    await saveIndex(dir, index)
+  })
 }
 
 /**

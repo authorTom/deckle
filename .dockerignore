@@ -3,6 +3,7 @@ dist
 .git
 .github
 .claude
+test
 *.md
 LICENSE
 Dockerfile

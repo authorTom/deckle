@@ -9,7 +9,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import zlib from 'node:zlib'
-import { createReadStream } from 'node:fs'
+import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
 
 const gzip = promisify(zlib.gzip)
@@ -36,10 +36,58 @@ const MIME = {
 const COMPRESSIBLE = /^(text\/|application\/(javascript|json)|image\/svg)/
 const GZIP_MIN_BYTES = 1024
 
+/**
+ * What the page may load and run.
+ *
+ * The point is `script-src 'self'`: the app keeps provider API keys in
+ * localStorage and can read and write the whole library, so a script that got
+ * into the page by any route — a note, a bookmark, a dependency bug — must not
+ * be able to run. Everything else is as open as the app genuinely needs:
+ *
+ *   - connect-src allows any http(s) origin, because the browser calls the AI
+ *     provider directly and LM Studio lives at whatever URL the user typed —
+ *     usually http://localhost or a LAN address.
+ *   - style-src allows inline styles, which the editor and React set freely.
+ *   - frame-ancestors replaces X-Frame-Options for browsers that know it.
+ */
+export const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "font-src 'self' data:",
+  "connect-src 'self' https: http:",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ')
+
 export const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Content-Security-Policy': CONTENT_SECURITY_POLICY,
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+}
+
+/**
+ * Stream an already-open file into a response whose headers are written.
+ *
+ * Through `pipeline`, never a bare `.pipe()`: a read stream that errors with no
+ * listener throws, and an uncaught throw there ends the process for every
+ * user. By this point a status has gone out, so the only honest answer left is
+ * to cut the response short — a truncated body, not a hang.
+ */
+export function pipeFile(res, handle) {
+  pipeline(handle.createReadStream(), res).catch((err) => {
+    // The client closing the tab mid-download is routine, not worth a log line.
+    if (err?.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
+      console.error('[deckle] file stream failed:', err?.message ?? err)
+    }
+    res.destroy()
+  })
 }
 
 export function createStaticHandler(publicDir) {
@@ -132,7 +180,17 @@ export function createStaticHandler(publicDir) {
       return
     }
 
+    // Opened before the status goes out, so a file that disappeared or can't
+    // be read is still a clean 404 rather than a 200 with a broken body.
+    let handle
+    try {
+      handle = await fs.open(file.abs, 'r')
+    } catch {
+      res.writeHead(404, { ...SECURITY_HEADERS, 'Content-Type': 'text/plain' })
+      res.end('Not found')
+      return
+    }
     res.writeHead(200, { ...headers, 'Content-Length': file.stat.size })
-    createReadStream(file.abs).pipe(res)
+    pipeFile(res, handle)
   }
 }

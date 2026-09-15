@@ -1,28 +1,40 @@
 // Bookmark persistence: bookmarks.json in the library's hidden data folder,
 // alongside tasks.
 
-import { readDataJson, writeDataJson } from '../fs/appData'
+import { preserveUnreadable, readDataFile, writeDataJson } from '../fs/appData'
 import type { BookmarkStore } from './types'
 
 const BOOKMARKS_FILE = 'bookmarks.json'
 
-export const EMPTY_STORE: BookmarkStore = {
+/** Shown before a library loads, and for one with no bookmarks yet. Never mutated. */
+export const EMPTY_STORE: BookmarkStore = Object.freeze({
   version: 1,
   bookmarks: [],
   collections: [],
+}) as BookmarkStore
+
+export function isBookmarkStore(value: unknown): value is BookmarkStore {
+  const store = value as BookmarkStore | null
+  return (
+    store?.version === 1 &&
+    Array.isArray(store.bookmarks) &&
+    Array.isArray(store.collections)
+  )
 }
 
 export async function loadBookmarkStore(
   dir: FileSystemDirectoryHandle,
 ): Promise<BookmarkStore> {
-  const parsed = (await readDataJson(dir, BOOKMARKS_FILE)) as BookmarkStore | null
-  if (
-    parsed?.version === 1 &&
-    Array.isArray(parsed.bookmarks) &&
-    Array.isArray(parsed.collections)
-  ) {
-    return parsed
-  }
+  const read = await readDataFile(dir, BOOKMARKS_FILE)
+  if (read.state === 'missing') return EMPTY_STORE
+  if (read.parsed && isBookmarkStore(read.value)) return read.value
+
+  // Same rule as tasks.json: an unreadable file is copied aside before the
+  // next save can replace it, and if the copy fails, nothing is saved.
+  const backup = await preserveUnreadable(dir, BOOKMARKS_FILE, read.raw)
+  console.warn(
+    `[deckle] .deckle/${BOOKMARKS_FILE} could not be read; kept a copy as .deckle/${backup} and started with no bookmarks`,
+  )
   return EMPTY_STORE
 }
 

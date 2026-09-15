@@ -8,7 +8,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { timeAgo } from '../lib/format'
-import { domainOf, normalizeUrl } from '../bookmarks/url'
+import { domainOf, normalizeUrl, safeHttpUrl } from '../bookmarks/url'
 import type { BookmarksApi } from '../bookmarks/useBookmarks'
 
 interface BookmarkListProps {
@@ -175,9 +175,9 @@ export default function BookmarkList({
                   <span className="task-meta">
                     <a
                       className="bm-link"
-                      href={b.url}
+                      href={safeHttpUrl(b.url)}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                       title={b.url}
                     >
                       {domainOf(b.url)}

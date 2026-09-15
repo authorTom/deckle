@@ -26,7 +26,8 @@ import {
 } from './library-store.mjs'
 import { buildOpenApi } from './openapi.mjs'
 import { VERSION } from './version.mjs'
-import { writeZip } from './zip.mjs'
+import { ClientGoneError, writeZip } from './zip.mjs'
+import { isValidDateStr, nextOccurrence, todayStr } from './dates.mjs'
 
 const PREFIX = '/api/v1'
 
@@ -62,6 +63,33 @@ function requireString(body, field, { optional = false, max = 100_000 } = {}) {
   }
   if (value.length > max) {
     throw new ApiError(400, 'invalid_body', `"${field}" is too long`)
+  }
+  return value
+}
+
+/** A reference to another record: a non-empty string, or null for "none". */
+function optionalId(body, field) {
+  const value = body?.[field]
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (typeof value !== 'string' || !value) {
+    throw new ApiError(400, 'invalid_body', `"${field}" must be an id string or null`)
+  }
+  return value
+}
+
+/**
+ * A project or collection colour.
+ *
+ * The app paints it straight into a style attribute, so anything but a hex
+ * colour is refused — `url(https://…)` would otherwise turn every render of
+ * the task panel into a request to wherever the caller pointed it.
+ */
+function optionalColor(body, fallback) {
+  const value = requireString(body, 'color', { optional: true, max: 32 })
+  if (value === undefined) return fallback
+  if (!/^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value)) {
+    throw new ApiError(400, 'invalid_body', '"color" must be a hex colour such as "#30a46c"')
   }
   return value
 }
@@ -144,11 +172,19 @@ export function createApi({
     }
     if (!chunks.length) return {}
     const text = Buffer.concat(chunks).toString('utf8')
+    let parsed
     try {
-      return JSON.parse(text)
+      parsed = JSON.parse(text)
     } catch {
       throw new ApiError(400, 'invalid_json', 'request body is not valid JSON')
     }
+    // Every endpoint takes an object. `null`, `[]` and `"text"` are all valid
+    // JSON, and each used to reach a handler that read a property off it —
+    // answering a malformed request with a 500.
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new ApiError(400, 'invalid_body', 'request body must be a JSON object')
+    }
+    return parsed
   }
 
   // ---- Notes ---------------------------------------------------------------
@@ -211,25 +247,11 @@ export function createApi({
   async function patchNote(path, body) {
     const existing = await store.readNote(path)
 
-    // Rename/move first, so a content edit in the same call lands on the note
-    // at its new home rather than leaving the old one updated.
-    let current = existing
-    if (body?.path !== undefined) {
-      current = await store.moveNote(current.path, normalizeNotePath(body.path))
-    } else if (body?.title !== undefined || body?.folder !== undefined) {
-      const folder =
-        body.folder !== undefined ? normalizeFolderPath(body.folder) : current.folder
-      const title =
-        body.title !== undefined
-          ? store.sanitizeName(body.title, current.title)
-          : current.title
-      const target = normalizeNotePath(`${folder ? `${folder}/` : ''}${title}`)
-      if (target !== current.path) current = await store.moveNote(current.path, target)
-    }
-
-    const edits = ['content', 'append', 'prepend'].filter(
-      (key) => body?.[key] !== undefined,
-    )
+    // Validate the whole request before touching the disk. The move used to
+    // happen first and the edit be checked after, so a rename paired with a
+    // malformed edit moved the note and then answered 400 — a request that
+    // "failed" having changed the library.
+    const edits = ['content', 'append', 'prepend'].filter((key) => body[key] !== undefined)
     if (edits.length > 1) {
       throw new ApiError(
         400,
@@ -237,19 +259,38 @@ export function createApi({
         'use only one of "content", "append" or "prepend" per request',
       )
     }
-    if (!edits.length) return current
+    const edit = edits.length
+      ? { kind: edits[0], text: requireString(body, edits[0], { max: 4_000_000 }) }
+      : null
+
+    let target = existing.path
+    if (body.path !== undefined) {
+      target = normalizeNotePath(requireString(body, 'path', { max: 1024 }))
+    } else if (body.title !== undefined || body.folder !== undefined) {
+      const folder =
+        body.folder !== undefined ? normalizeFolderPath(body.folder) : existing.folder
+      const title =
+        body.title !== undefined
+          ? store.sanitizeName(requireString(body, 'title', { max: 300 }), existing.title)
+          : existing.title
+      target = normalizeNotePath(`${folder ? `${folder}/` : ''}${title}`)
+    }
+
+    // Rename/move first, so a content edit in the same call lands on the note
+    // at its new home rather than leaving the old one updated.
+    const current =
+      target !== existing.path ? await store.moveNote(existing.path, target) : existing
+    if (!edit) return current
 
     let content
-    if (body.content !== undefined) {
-      content = requireString(body, 'content', { max: 4_000_000 })
-    } else if (body.append !== undefined) {
-      const suffix = requireString(body, 'append', { max: 4_000_000 })
+    if (edit.kind === 'content') {
+      content = edit.text
+    } else if (edit.kind === 'append') {
       const separator = current.content && !current.content.endsWith('\n') ? '\n' : ''
-      content = `${current.content}${separator}${suffix}`
+      content = `${current.content}${separator}${edit.text}`
     } else {
-      const prefix = requireString(body, 'prepend', { max: 4_000_000 })
-      const separator = prefix.endsWith('\n') ? '' : '\n'
-      content = `${prefix}${separator}${current.content}`
+      const separator = edit.text.endsWith('\n') ? '' : '\n'
+      content = `${edit.text}${separator}${current.content}`
     }
 
     const { note } = await store.writeNote(current.path, content, 'ai')
@@ -339,22 +380,16 @@ export function createApi({
     } catch (err) {
       // Headers are long gone, so there is no status left to send — cut the
       // response short so the client sees a truncated archive rather than a
-      // silently valid one, and log the reason.
-      console.error('[deckle] export failed midway:', err)
+      // silently valid one, and log the reason. A client that simply left is
+      // not a failure worth a log line.
+      if (!(err instanceof ClientGoneError)) {
+        console.error('[deckle] export failed midway:', err)
+      }
       res.destroy()
     }
   }
 
   // ---- Tasks ---------------------------------------------------------------
-
-  function today() {
-    const now = new Date()
-    return [
-      now.getFullYear(),
-      String(now.getMonth() + 1).padStart(2, '0'),
-      String(now.getDate()).padStart(2, '0'),
-    ].join('-')
-  }
 
   function validatePriority(value) {
     if (value === undefined) return undefined
@@ -368,8 +403,10 @@ export function createApi({
   function validateDue(value) {
     if (value === undefined) return undefined
     if (value === null) return null
-    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-      throw new ApiError(400, 'invalid_body', '"due" must be "YYYY-MM-DD" or null')
+    // A real date, not just the right shape: "2026-02-31" used to be stored,
+    // and then sorted and filtered as a string no calendar has.
+    if (!isValidDateStr(value)) {
+      throw new ApiError(400, 'invalid_body', '"due" must be a real date as "YYYY-MM-DD", or null')
     }
     return value
   }
@@ -397,7 +434,7 @@ export function createApi({
     const project = url.searchParams.get('project')
     const includeCompleted = boolParam(url.searchParams.get('include_completed'))
     const includeDeleted = boolParam(url.searchParams.get('include_deleted'))
-    const stamp = today()
+    const stamp = todayStr()
 
     return tasks.filter((task) => {
       if (task.deletedAt && !includeDeleted && filter !== 'deleted') return false
@@ -417,9 +454,16 @@ export function createApi({
   async function createTask(body) {
     const title = requireString(body, 'title', { max: 1000 }).trim()
     if (!title) throw new ApiError(400, 'invalid_body', '"title" cannot be empty')
+    const projectId = optionalId(body, 'projectId') ?? null
+    const due = validateDue(body.due) ?? null
+    const priority = validatePriority(body.priority) ?? 4
+    const recurrence = validateRecurrence(body.recurrence) ?? null
+    const source =
+      typeof body.sourceNote === 'string' && body.sourceNote
+        ? { noteId: normalizeNotePath(body.sourceNote) }
+        : undefined
 
     return await store.updateTasks((tasks) => {
-      const projectId = body.projectId ?? null
       if (projectId && !tasks.projects.some((p) => p.id === projectId)) {
         throw new ApiError(404, 'not_found', `no project with id "${projectId}"`)
       }
@@ -427,16 +471,14 @@ export function createApi({
         id: randomUUID(),
         title,
         projectId,
-        due: validateDue(body.due) ?? null,
-        priority: validatePriority(body.priority) ?? 4,
-        recurrence: validateRecurrence(body.recurrence) ?? null,
+        due,
+        priority,
+        recurrence,
         completedAt: null,
         deletedAt: null,
         createdAt: Date.now(),
       }
-      if (typeof body.sourceNote === 'string' && body.sourceNote) {
-        task.source = { noteId: normalizeNotePath(body.sourceNote) }
-      }
+      if (source) task.source = source
       tasks.tasks.push(task)
       return task
     })
@@ -453,17 +495,36 @@ export function createApi({
         task.title = title
       }
       if (body.projectId !== undefined) {
-        if (body.projectId !== null && !store_.projects.some((p) => p.id === body.projectId)) {
-          throw new ApiError(404, 'not_found', `no project with id "${body.projectId}"`)
+        const projectId = optionalId(body, 'projectId')
+        if (projectId !== null && !store_.projects.some((p) => p.id === projectId)) {
+          throw new ApiError(404, 'not_found', `no project with id "${projectId}"`)
         }
-        task.projectId = body.projectId
+        task.projectId = projectId
       }
       if (body.due !== undefined) task.due = validateDue(body.due)
       if (body.priority !== undefined) task.priority = validatePriority(body.priority)
       if (body.recurrence !== undefined) task.recurrence = validateRecurrence(body.recurrence)
       if (body.completed !== undefined) {
-        task.completedAt = body.completed ? Date.now() : null
+        if (typeof body.completed !== 'boolean') {
+          throw new ApiError(400, 'invalid_body', '"completed" must be true or false')
+        }
+        if (!body.completed) {
+          task.completedAt = null
+        } else if (!task.completedAt) {
+          // Exactly what the app's checkbox does (toggleComplete in
+          // src/tasks/useTasks.ts): a recurring task with a due date moves on
+          // to its next occurrence rather than completing. The API used to
+          // complete it outright, ending the series for everyone.
+          if (task.recurrence && task.due) {
+            task.due = nextOccurrence(task.due, task.recurrence, todayStr())
+          } else {
+            task.completedAt = Date.now()
+          }
+        }
       }
+      // Mutations above run on a freshly loaded copy, and updateTasks only
+      // writes once this returns — so a validation error part-way through
+      // leaves the file untouched rather than half-edited.
       return task
     })
   }
@@ -488,8 +549,8 @@ export function createApi({
 
   async function createBookmark(body) {
     const url = normalizeUrl(body?.url)
+    const collectionId = optionalId(body, 'collectionId') ?? null
     return await store.updateBookmarks((data) => {
-      const collectionId = body.collectionId ?? null
       if (collectionId && !data.collections.some((c) => c.id === collectionId)) {
         throw new ApiError(404, 'not_found', `no collection with id "${collectionId}"`)
       }
@@ -523,13 +584,11 @@ export function createApi({
         bookmark.comment = requireString(body, 'comment', { max: 10_000 })
       }
       if (body.collectionId !== undefined) {
-        if (
-          body.collectionId !== null &&
-          !data.collections.some((c) => c.id === body.collectionId)
-        ) {
-          throw new ApiError(404, 'not_found', `no collection with id "${body.collectionId}"`)
+        const collectionId = optionalId(body, 'collectionId')
+        if (collectionId !== null && !data.collections.some((c) => c.id === collectionId)) {
+          throw new ApiError(404, 'not_found', `no collection with id "${collectionId}"`)
         }
-        bookmark.collectionId = body.collectionId
+        bookmark.collectionId = collectionId
       }
       return bookmark
     })
@@ -733,9 +792,7 @@ export function createApi({
           const created = {
             id: randomUUID(),
             name,
-            color:
-              requireString(body, 'color', { optional: true, max: 32 }) ??
-              PALETTE[data.projects.length % PALETTE.length],
+            color: optionalColor(body, PALETTE[data.projects.length % PALETTE.length]),
           }
           data.projects.push(created)
           return created
@@ -799,9 +856,7 @@ export function createApi({
           const created = {
             id: randomUUID(),
             name,
-            color:
-              requireString(body, 'color', { optional: true, max: 32 }) ??
-              PALETTE[data.collections.length % PALETTE.length],
+            color: optionalColor(body, PALETTE[data.collections.length % PALETTE.length]),
           }
           data.collections.push(created)
           return created

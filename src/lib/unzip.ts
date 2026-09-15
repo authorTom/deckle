@@ -61,6 +61,13 @@ const DEFAULT_MAX_TOTAL_BYTES = 512 * 1024 * 1024
 
 class ZipFormatError extends Error {}
 
+/** An entry inflated to more bytes than the archive's own index claims. */
+class ExpandsBeyondClaimError extends Error {}
+
+function megabytes(bytes: number): string {
+  return `${Math.round(bytes / (1024 * 1024))} MB`
+}
+
 /** Read a 64-bit little-endian value, refusing anything JS can't count to. */
 function u64(view: DataView, offset: number): number {
   const low = view.getUint32(offset, true)
@@ -201,16 +208,44 @@ function readCentralEntry(
   return entry
 }
 
-async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
+/**
+ * Inflate one entry, refusing to produce more than `limit` bytes.
+ *
+ * The size guards before this read the *claimed* size from the archive's
+ * index, and an archive can claim anything: a few kilobytes that say "1 KB"
+ * and inflate to gigabytes would sail past them and exhaust the tab's memory.
+ * So the output is counted as it arrives and the stream abandoned the moment
+ * it passes what the index promised.
+ */
+async function inflateRaw(data: Uint8Array, limit: number): Promise<Uint8Array> {
   if (typeof DecompressionStream === 'undefined') {
     throw new ZipFormatError(
       'This browser cannot decompress ZIP files. Unzip the archive first and import the folder.',
     )
   }
-  const stream = new Blob([data as BlobPart])
+  const reader = new Blob([data as BlobPart])
     .stream()
     .pipeThrough(new DecompressionStream('deflate-raw'))
-  return new Uint8Array(await new Response(stream).arrayBuffer())
+    .getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.length
+    if (total > limit) {
+      await reader.cancel().catch(() => {})
+      throw new ExpandsBeyondClaimError()
+    }
+    chunks.push(value)
+  }
+  const out = new Uint8Array(total)
+  let at = 0
+  for (const chunk of chunks) {
+    out.set(chunk, at)
+    at += chunk.length
+  }
+  return out
 }
 
 /** Entries every macOS-made archive carries and nobody ever wants imported. */
@@ -274,7 +309,7 @@ export async function unzip(
       continue
     }
     if (entry.uncompressedSize > maxFileBytes) {
-      skipped.push({ path: entry.path, reason: 'larger than 8 MB' })
+      skipped.push({ path: entry.path, reason: `larger than ${megabytes(maxFileBytes)}` })
       continue
     }
     if (entry.method !== 0 && entry.method !== 8) {
@@ -306,7 +341,13 @@ export async function unzip(
 
     try {
       const raw = bytes.subarray(dataStart, dataEnd)
-      const content = entry.method === 8 ? await inflateRaw(raw) : raw.slice()
+      const content =
+        entry.method === 8 ? await inflateRaw(raw, entry.uncompressedSize) : raw.slice()
+
+      if (content.length !== entry.uncompressedSize) {
+        skipped.push({ path: entry.path, reason: 'is damaged (its size does not match the archive)' })
+        continue
+      }
 
       // The CRC is the archive's own claim about what should have come out.
       // Checking it is the difference between importing a note and importing
@@ -320,7 +361,13 @@ export async function unzip(
       files.push({ path: entry.path, bytes: content })
     } catch (err) {
       if (err instanceof ZipFormatError) throw err
-      skipped.push({ path: entry.path, reason: 'could not be decompressed' })
+      skipped.push({
+        path: entry.path,
+        reason:
+          err instanceof ExpandsBeyondClaimError
+            ? 'expands to far more than the archive says (damaged, or built to exhaust memory)'
+            : 'could not be decompressed',
+      })
     }
   }
 
