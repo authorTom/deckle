@@ -272,6 +272,14 @@ DECKLE_SERVER_LIBRARY=true DECKLE_LIBRARY_DIR=./library node server/index.mjs &
 npm run dev                           # → http://localhost:5173
 ```
 
+To run the tests — the server through its real HTTP handler, the API, every
+storage path, the assistant's tools and autosave:
+
+```bash
+npm test                              # once, as CI runs it
+npm run test:watch                    # re-run on change
+```
+
 ## Configuration
 
 Only relevant when the server library is enabled.
@@ -283,6 +291,7 @@ Only relevant when the server library is enabled.
 | `DECKLE_LIBRARY_NAME` | `My Notes` | Name shown in the app |
 | `DECKLE_SESSION_SECRET` | *(random)* | Fixed cookie-signing key, so restarts don't sign everyone out |
 | `DECKLE_SESSION_TTL_DAYS` | `30` | How long a sign-in lasts |
+| `DECKLE_TRUST_PROXY` | *(none)* | `true` behind a reverse proxy (a number for a chain of them), so sign-in throttling sees real client addresses |
 | `DECKLE_LIBRARY_DIR` | `/data` | Where the notes live inside the container |
 | `DECKLE_STATE_DIR` | `<library>/.deckle-state` | Deckle's own state — the shared assistant settings. Never served as part of the library |
 | `DECKLE_API_TOKENS` | *(none)* | Bearer tokens for the [API](#api). Blank leaves it switched off |
@@ -491,12 +500,15 @@ beyond Node itself.
 
 ```
 server/                  # Container runtime (Node built-ins only, no deps)
-  index.mjs              # HTTP entry: routing, config, graceful shutdown
+  index.mjs              # Entry point: boot, listen, graceful shutdown
+  app.mjs                # The HTTP app: configuration, routing, error handling
   library-api.mjs        # Server library file API (tree/read/write/mkdir/delete)
   library-store.mjs      # Library semantics server-side: trash, history, tasks…
   auth.mjs               # Optional password gate + signed session cookies
   api.mjs                # /api/v1 REST API for agents and scripts
   api-auth.mjs           # Bearer tokens for the API, with read-only scopes
+  throttle.mjs           # Failed-attempt throttling, and trusted-proxy client addresses
+  dates.mjs              # Recurring-task dates, mirroring src/tasks/dates.ts
   openapi.mjs            # The API's self-served OpenAPI 3.1 description
   search.mjs             # BM25 ranking behind GET /api/v1/search
   zip.mjs                # Streaming ZIP writer behind GET /api/v1/export
@@ -518,6 +530,11 @@ src/
   queue/                 # Background run queue (.deckle/runs/), executed in the browser
   lib/                   # Markdown, PDF and ZIP export; Markdown import; BM25
   styles/                # theme / global / editor / print CSS
+
+test/                    # npm test (Vitest)
+  server/                # The server through its real HTTP handler: auth, API, storage
+  client/                # Library, storage, queue, assistant tools, hooks and autosave
+  helpers/               # An in-memory File System Access API, and a test server
 ```
 
 ## Security
@@ -535,7 +552,19 @@ Relevant when you enable the server library.
   isn't stored in the browser and isn't sent again after sign-in. Repeated
   failures from one address are throttled (10 per 15 minutes). Sessions last
   `DECKLE_SESSION_TTL_DAYS`; if one expires while the app is open, Deckle returns to
-  the unlock screen rather than failing saves silently.
+  the unlock screen rather than failing saves silently. Changing
+  `DECKLE_PASSWORD` signs every session out.
+- **Behind a reverse proxy, set `DECKLE_TRUST_PROXY=true`.** Throttling counts
+  failures per client address. Without the setting Deckle uses the address that
+  connected — which, behind Caddy or nginx, is the proxy for everyone — and
+  ignores `X-Forwarded-For`, because any client can write that header and would
+  otherwise dodge the throttle by naming a new address on every guess. With it,
+  only the entries your proxy appended are believed.
+- **The page runs only its own scripts.** Every response carries a
+  Content-Security-Policy with `script-src 'self'`, so script that reaches the
+  page by any route — a note, a bookmark, a dependency bug — cannot run. It
+  still allows the browser to call any AI provider, including an LM Studio on
+  your network.
 - **AI keys.** The server never proxies AI requests — your browser always calls
   the provider itself. Where the key is *kept* depends on the deployment: with a
   password set, the server holds one copy for every device that signs in, stored

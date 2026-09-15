@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo } from 'react'
 import { EMPTY_STORE, loadTaskStore, saveTaskStore } from './store'
 import { nextOccurrence } from './dates'
 import { PALETTE } from '../lib/palette'
+import { useDataFile } from '../hooks/useDataFile'
 import type { Priority, Recurrence, Task, TaskComment, TaskStore } from './types'
 
 let counter = 0
@@ -20,69 +21,22 @@ export interface AddTaskInput {
   source?: { noteId: string }
 }
 
+/** Load the store, dropping binned tasks past their retention. */
+async function loadWithPurge(dir: FileSystemDirectoryHandle): Promise<TaskStore> {
+  const s = await loadTaskStore(dir)
+  const cutoff = Date.now() - TRASH_RETENTION_MS
+  const kept = s.tasks.filter((t) => !t.deletedAt || t.deletedAt > cutoff)
+  return kept.length === s.tasks.length ? s : { ...s, tasks: kept }
+}
+
 /** Task state backed by .deckle/tasks.json in the library, saved with a debounce. */
 export function useTasks(dir: FileSystemDirectoryHandle | null) {
-  const [store, setStore] = useState<TaskStore>(EMPTY_STORE)
-
-  const dirRef = useRef(dir)
-  dirRef.current = dir
-  const latest = useRef(store)
-  latest.current = store
-  const dirty = useRef(false)
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-
-  // (Re)load whenever the library changes.
-  useEffect(() => {
-    let cancelled = false
-    setStore(EMPTY_STORE)
-    dirty.current = false
-    if (!dir) return
-    void loadTaskStore(dir).then((s) => {
-      if (cancelled) return
-      const cutoff = Date.now() - TRASH_RETENTION_MS
-      const kept = s.tasks.filter((t) => !t.deletedAt || t.deletedAt > cutoff)
-      setStore(kept.length === s.tasks.length ? s : { ...s, tasks: kept })
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [dir])
-
-  const flush = useCallback(() => {
-    if (timer.current) {
-      clearTimeout(timer.current)
-      timer.current = undefined
-    }
-    const d = dirRef.current
-    if (d && dirty.current) {
-      dirty.current = false
-      void saveTaskStore(d, latest.current)
-    }
-  }, [])
-
-  const persistSoon = useCallback(() => {
-    dirty.current = true
-    if (timer.current) clearTimeout(timer.current)
-    timer.current = setTimeout(flush, 400)
-  }, [flush])
-
-  // Best-effort save when the tab is hidden or closed.
-  useEffect(() => {
-    window.addEventListener('beforeunload', flush)
-    document.addEventListener('visibilitychange', flush)
-    return () => {
-      window.removeEventListener('beforeunload', flush)
-      document.removeEventListener('visibilitychange', flush)
-    }
-  }, [flush])
-
-  const mutate = useCallback(
-    (fn: (s: TaskStore) => TaskStore) => {
-      setStore((prev) => fn(prev))
-      persistSoon()
-    },
-    [persistSoon],
-  )
+  const { store, mutate } = useDataFile<TaskStore>(dir, {
+    load: loadWithPurge,
+    save: saveTaskStore,
+    empty: EMPTY_STORE,
+    label: 'tasks',
+  })
 
   const addTask = useCallback(
     (input: AddTaskInput) => {
@@ -179,6 +133,7 @@ export function useTasks(dir: FileSystemDirectoryHandle | null) {
           if (t.id !== id) return t
           if (t.completedAt) return { ...t, completedAt: null }
           // Recurring tasks roll to the next occurrence instead of completing.
+          // server/api.mjs does the same for PATCH /tasks/{id}; keep them in step.
           if (t.recurrence && t.due) {
             return { ...t, due: nextOccurrence(t.due, t.recurrence) }
           }

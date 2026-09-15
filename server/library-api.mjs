@@ -19,6 +19,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { constants as fsConstants, createWriteStream } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { pipeline } from 'node:stream/promises'
 import { Transform } from 'node:stream'
 import {
@@ -36,10 +37,10 @@ const MD_EXT = /\.md$/i
  * The server keeps its own state there (the shared assistant settings, and the
  * API key in them), and it sits under the library directory only because that
  * is the volume a self-hoster actually mounts — not because it is part of the
- * library. Every way out of this module passes through `safePath` or `list`,
- * so denying it in those two places is what keeps it out of: the file API, the
- * client's export walk (which lists its way through the remote handle), the
- * server's own export walk, the machine API, and the assistant's read_note
+ * library. Every way out of this module passes through `safePath`, `walk` or
+ * `list`, so denying it in those places is what keeps it out of: the file API,
+ * the client's export walk (which lists its way through the remote handle), the
+ * server's own export walk, the machine API, and the assistant's read_file
  * tool — none of which have any business reading a key.
  *
  * Set DECKLE_STATE_DIR to move the state somewhere else entirely; this name
@@ -69,14 +70,64 @@ function limitBytes(limit) {
   })
 }
 
-export function createLibraryApi(root) {
-  /** Resolve + symlink-check in one step, refusing the reserved folder. */
+/** A temporary name beside `abs`, hidden from the tree by its leading dot. */
+function tempNameFor(abs, kind) {
+  return path.join(
+    path.dirname(abs),
+    `.deckle-${kind}-${process.pid}-${Date.now()}-${randomBytes(6).toString('hex')}`,
+  )
+}
+
+/** stat, or null when the entry vanished between a listing and the stat. */
+async function statOrNull(abs) {
+  try {
+    return await fs.stat(abs)
+  } catch (err) {
+    if (err.code === 'ENOENT') return null
+    throw err
+  }
+}
+
+/**
+ * @param {string} rootDir  the library directory
+ * @param {{ reservedPaths?: string[] }} [options]
+ *   extra absolute paths to hide — the state directory, when DECKLE_STATE_DIR
+ *   puts it somewhere inside the library other than RESERVED_DIR
+ */
+export function createLibraryApi(rootDir, { reservedPaths = [] } = {}) {
+  const root = path.resolve(rootDir)
+
+  // Compared case-insensitively. A library bind-mounted from macOS or Windows
+  // lives on a case-insensitive filesystem, where ".DECKLE-STATE" opens the
+  // very folder this is guarding. Over-refusing a differently-cased folder on
+  // Linux costs nothing.
+  const reserved = [path.join(root, RESERVED_DIR), ...reservedPaths.map((p) => path.resolve(p))]
+    .map((p) => p.toLowerCase())
+
+  function isReserved(abs) {
+    const probe = abs.toLowerCase()
+    return reserved.some((r) => probe === r || probe.startsWith(r + path.sep))
+  }
+
+  /** Would removing `abs` take a reserved folder with it? */
+  function holdsReserved(abs) {
+    const probe = abs.toLowerCase()
+    return reserved.some((r) => r === probe || r.startsWith(probe + path.sep))
+  }
+
+  /**
+   * Resolve + symlink-check in one step, refusing the reserved folder.
+   *
+   * The reserved check runs on the *resolved* path, not the string as sent. It
+   * used to compare the first segment of the raw string, so
+   * "./.deckle-state/assistant.json" — whose first segment is "." — walked
+   * straight past it.
+   */
   async function safePath(rel) {
-    const first = String(rel ?? '').replace(/\\/g, '/').split('/')[0]
-    if (first === RESERVED_DIR) {
+    const abs = resolveLibraryPath(root, rel)
+    if (isReserved(abs)) {
       throw new BadPathError(`${RESERVED_DIR} is reserved`)
     }
-    const abs = resolveLibraryPath(root, rel)
     await assertRealPathInside(root, abs)
     return abs
   }
@@ -102,6 +153,8 @@ export function createLibraryApi(root) {
 
     for (const entry of entries) {
       if (entry.name.startsWith('.')) continue // .trash, .history, .deckle, .git…
+      const childAbs = path.join(abs, entry.name)
+      if (isReserved(childAbs)) continue
       const id = joinRelative(prefix, entry.name)
 
       if (entry.isDirectory()) {
@@ -109,10 +162,13 @@ export function createLibraryApi(root) {
           kind: 'folder',
           id,
           name: entry.name,
-          children: await walk(path.join(abs, entry.name), id),
+          children: await walk(childAbs, id),
         })
       } else if (entry.isFile() && MD_EXT.test(entry.name)) {
-        const stat = await fs.stat(path.join(abs, entry.name))
+        // A note deleted mid-walk is simply not in the tree, rather than a
+        // 404 for the whole library.
+        const stat = await statOrNull(childAbs)
+        if (!stat) continue
         files.push({
           kind: 'file',
           id,
@@ -130,6 +186,8 @@ export function createLibraryApi(root) {
   }
 
   return {
+    root,
+
     /** Create the library directory if this is a first run. */
     async init() {
       await fs.mkdir(root, { recursive: true })
@@ -148,13 +206,13 @@ export function createLibraryApi(root) {
       const entries = await fs.readdir(abs, { withFileTypes: true })
       const out = []
       for (const entry of entries) {
-        // Reserved at the root only: a note folder deeper in the tree may
-        // legitimately carry any name.
-        if (!rel && entry.name === RESERVED_DIR) continue
+        const childAbs = path.join(abs, entry.name)
+        if (isReserved(childAbs)) continue
         if (entry.isDirectory()) {
           out.push({ name: entry.name, kind: 'directory' })
         } else if (entry.isFile()) {
-          const stat = await fs.stat(path.join(abs, entry.name))
+          const stat = await statOrNull(childAbs)
+          if (!stat) continue
           out.push({
             name: entry.name,
             kind: 'file',
@@ -177,16 +235,32 @@ export function createLibraryApi(root) {
       }
     },
 
-    /** Absolute path for streaming a file back, after all safety checks. */
-    async fileForRead(rel) {
+    /**
+     * Open a file for streaming back, after all safety checks.
+     *
+     * Opened *before* any response header is written, so a file that exists
+     * but can't be read (a root-owned file in a bind mount, say) is an error
+     * the caller can still answer with a status. It used to be handed to
+     * createReadStream after a 200 had gone out, and the stream's unhandled
+     * 'error' event took the whole process down with it.
+     *
+     * The caller owns the returned handle; streaming it closes it.
+     */
+    async openForRead(rel) {
       const abs = await safePath(rel)
-      const stat = await fs.stat(abs)
-      if (!stat.isFile()) {
-        const err = new Error('not a file')
-        err.code = 'ENOTFILE'
+      const handle = await fs.open(abs, 'r')
+      try {
+        const stat = await handle.stat()
+        if (!stat.isFile()) {
+          const err = new Error('not a file')
+          err.code = 'ENOTFILE'
+          throw err
+        }
+        return { handle, size: stat.size, lastModified: Math.round(stat.mtimeMs) }
+      } catch (err) {
+        await handle.close().catch(() => {})
         throw err
       }
-      return { abs, size: stat.size, lastModified: Math.round(stat.mtimeMs) }
     },
 
     /**
@@ -197,10 +271,7 @@ export function createLibraryApi(root) {
     async writeFile(rel, stream) {
       const abs = await safePath(rel)
       await fs.mkdir(path.dirname(abs), { recursive: true })
-      const tmp = path.join(
-        path.dirname(abs),
-        `.deckle-upload-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      )
+      const tmp = tempNameFor(abs, 'upload')
       try {
         await pipeline(stream, limitBytes(MAX_FILE_BYTES), createWriteStream(tmp))
         await fs.rename(tmp, abs)
@@ -230,10 +301,7 @@ export function createLibraryApi(root) {
     async writeText(rel, text) {
       const abs = await safePath(rel)
       await fs.mkdir(path.dirname(abs), { recursive: true })
-      const tmp = path.join(
-        path.dirname(abs),
-        `.deckle-write-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      )
+      const tmp = tempNameFor(abs, 'write')
       try {
         await fs.writeFile(tmp, text, 'utf8')
         await fs.rename(tmp, abs)
@@ -264,6 +332,9 @@ export function createLibraryApi(root) {
     async remove(rel, recursive) {
       const abs = await safePath(rel)
       if (abs === root) throw new BadPathError('cannot remove the library root')
+      if (holdsReserved(abs)) {
+        throw new BadPathError(`cannot remove a folder holding ${RESERVED_DIR}`)
+      }
       const stat = await fs.stat(abs)
       if (stat.isDirectory()) {
         if (recursive) {

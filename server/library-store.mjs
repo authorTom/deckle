@@ -164,14 +164,40 @@ export function createLibraryStore(library) {
   }
 
   /**
-   * Read one of the data files, falling back to its pre-rename location. Writes
-   * always go to the current path, so the file moves forward on first mutation;
-   * nothing deletes the legacy copy.
+   * Read one of the data files (tasks, bookmarks), falling back to its
+   * pre-rename location when the current one doesn't exist. Writes always go
+   * to the current path, so the file moves forward on first mutation; nothing
+   * deletes the legacy copy.
+   *
+   * Unlike the trash and history indexes, these files *are* the data. A copy
+   * that wouldn't parse — or parsed into a shape this version doesn't know,
+   * such as a newer Deckle's — used to be read as empty, and the next task an
+   * agent added was written straight over every task that was there. Now it is
+   * refused, and nothing is written until a person has looked at the file.
    */
-  async function readDataJson(path, legacyPath, fallback) {
-    const current = await readJson(path, null)
-    if (current !== null) return current
-    return readJson(legacyPath, fallback)
+  async function loadDataFile(path, legacyPath, isValid, empty) {
+    for (const candidate of [path, legacyPath]) {
+      let text
+      try {
+        text = await library.readText(candidate)
+      } catch (err) {
+        if (err?.code === 'ENOENT' || err?.code === 'ENOTDIR') continue
+        throw err
+      }
+      let parsed
+      try {
+        parsed = JSON.parse(text)
+      } catch {
+        parsed = undefined
+      }
+      if (isValid(parsed)) return parsed
+      throw new ApiError(
+        500,
+        'store_unreadable',
+        `${candidate} is not a file this version of Deckle can read (it is not valid JSON, or was written by a newer version). Nothing was changed — repair or move the file, then try again.`,
+      )
+    }
+    return empty()
   }
 
   // ---- Notes ---------------------------------------------------------------
@@ -393,27 +419,29 @@ export function createLibraryStore(library) {
 
   // ---- Tasks & bookmarks ---------------------------------------------------
 
-  const EMPTY_TASKS = { version: 1, tasks: [], projects: [] }
-  const EMPTY_BOOKMARKS = { version: 1, bookmarks: [], collections: [] }
+  // Fresh objects every time. These used to be shared constants, and
+  // updateTasks mutates what it loads — so a first task added to a library
+  // with no tasks.json was pushed into the constant itself, and stayed there
+  // for every later load if that write failed.
+  const emptyTasks = () => ({ version: 1, tasks: [], projects: [] })
+  const emptyBookmarks = () => ({ version: 1, bookmarks: [], collections: [] })
+
+  const isTaskStore = (store) =>
+    store?.version === 1 && Array.isArray(store.tasks) && Array.isArray(store.projects)
+  const isBookmarkStore = (store) =>
+    store?.version === 1 && Array.isArray(store.bookmarks) && Array.isArray(store.collections)
 
   async function loadTasks() {
-    const store = await readDataJson(TASKS_FILE, LEGACY_TASKS_FILE, EMPTY_TASKS)
-    return store?.version === 1 && Array.isArray(store.tasks) && Array.isArray(store.projects)
-      ? store
-      : EMPTY_TASKS
+    return await loadDataFile(TASKS_FILE, LEGACY_TASKS_FILE, isTaskStore, emptyTasks)
   }
 
   async function loadBookmarks() {
-    const store = await readDataJson(
+    return await loadDataFile(
       BOOKMARKS_FILE,
       LEGACY_BOOKMARKS_FILE,
-      EMPTY_BOOKMARKS,
+      isBookmarkStore,
+      emptyBookmarks,
     )
-    return store?.version === 1 &&
-      Array.isArray(store.bookmarks) &&
-      Array.isArray(store.collections)
-      ? store
-      : EMPTY_BOOKMARKS
   }
 
   /** Read-modify-write the task store under a lock. */

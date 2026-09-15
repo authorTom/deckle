@@ -57,6 +57,41 @@ function u32(value) {
   return buf
 }
 
+/** The response closed before the archive was finished. Routine, not a fault. */
+export class ClientGoneError extends Error {
+  constructor() {
+    super('the client went away before the export finished')
+  }
+}
+
+/**
+ * Wait for a full send buffer to empty — or for the connection to end.
+ *
+ * Waiting on 'drain' alone hung for ever when a client disconnected with the
+ * buffer full: 'drain' never comes to a closed socket, so the export sat in
+ * memory, holding its file reads, for the life of the process.
+ */
+function waitForDrain(out) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      out.off('drain', onDrain)
+      out.off('close', onGone)
+      out.off('error', onGone)
+    }
+    const onDrain = () => {
+      cleanup()
+      resolve()
+    }
+    const onGone = () => {
+      cleanup()
+      reject(new ClientGoneError())
+    }
+    out.on('drain', onDrain)
+    out.on('close', onGone)
+    out.on('error', onGone)
+  })
+}
+
 /**
  * Write a ZIP archive to `res` (or any writable) from an async iterable of
  * `{ path, content: Buffer, modified: Date }`.
@@ -69,9 +104,10 @@ export async function writeZip(out, entries) {
   let offset = 0
 
   const push = (chunk) => {
+    if (out.destroyed || out.writableEnded) return Promise.reject(new ClientGoneError())
     offset += chunk.length
     // Respect backpressure so a slow client can't balloon the send buffer.
-    return out.write(chunk) ? null : new Promise((resolve) => out.once('drain', resolve))
+    return out.write(chunk) ? null : waitForDrain(out)
   }
 
   for await (const entry of entries) {

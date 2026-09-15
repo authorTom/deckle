@@ -32,7 +32,7 @@ function today(): string {
 
 /**
  * "Writes British English and expects the copy to match"
- *   → "writes-british-english-and"
+ *   → "writes-british-english-and-expects-the"
  *
  * Short on purpose, and cut at a word boundary. Every path appears in
  * `index.md`, which goes into every single request — so a store of forty
@@ -116,6 +116,11 @@ async function locate(
   create: boolean,
 ): Promise<Entry> {
   const segments = path.split('/').filter(Boolean)
+  // The memory tools run without an approval step, so their paths must not
+  // be able to climb out of the memory folder — whatever a backend would say.
+  if (segments.some((s) => s === '.' || s === '..' || s.includes('\\'))) {
+    throw new Error('Invalid memory path')
+  }
   const name = segments.pop()
   if (!name) throw new Error('Invalid memory path')
   let parent = await dataSubdir(dir, MEMORY_DIR, create)

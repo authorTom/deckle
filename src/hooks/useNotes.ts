@@ -526,11 +526,28 @@ export function useNotes() {
     )
   }, [])
 
-  const flush = useCallback(async () => {
+  // Flushes run one at a time.
+  //
+  // They used to overlap whenever a write outlasted the debounce — a slow link
+  // to a server library, or the history snapshot a flush takes every few
+  // minutes — and nothing kept them in order. The older batch could finish
+  // last and write the older text over the newer, leaving the file on disk a
+  // paragraph behind the editor while the indicator said "Saved".
+  const flushChain = useRef<Promise<void>>(Promise.resolve())
+
+  const flush = useCallback((): Promise<void> => {
     if (timer.current) {
       clearTimeout(timer.current)
       timer.current = undefined
     }
+    const run = flushChain.current.then(() => writePending())
+    flushChain.current = run.catch(() => undefined)
+    return run
+    // writePending is declared below and changes only when `dir` does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dir, syncDirty])
+
+  async function writePending(): Promise<void> {
     if (!dir || pending.current.size === 0) return
     const batch = [...pending.current]
     pending.current.clear()
@@ -571,7 +588,7 @@ export function useNotes() {
       setSaveError(describeSaveError(err))
       setSaveState('error')
     }
-  }, [dir, syncDirty])
+  }
 
   const saveContent = useCallback(
     (id: string, content: string) => {

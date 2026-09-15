@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo } from 'react'
 import { EMPTY_STORE, loadBookmarkStore, saveBookmarkStore } from './store'
 import { domainOf } from './url'
 import { PALETTE } from '../lib/palette'
+import { useDataFile } from '../hooks/useDataFile'
 import type { Bookmark, BookmarkStore } from './types'
 
 let counter = 0
@@ -18,62 +19,12 @@ export interface AddBookmarkInput {
 
 /** Bookmark state backed by .deckle/bookmarks.json, saved with a debounce. */
 export function useBookmarks(dir: FileSystemDirectoryHandle | null) {
-  const [store, setStore] = useState<BookmarkStore>(EMPTY_STORE)
-
-  const dirRef = useRef(dir)
-  dirRef.current = dir
-  const latest = useRef(store)
-  latest.current = store
-  const dirty = useRef(false)
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-
-  useEffect(() => {
-    let cancelled = false
-    setStore(EMPTY_STORE)
-    dirty.current = false
-    if (!dir) return
-    void loadBookmarkStore(dir).then((s) => {
-      if (!cancelled) setStore(s)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [dir])
-
-  const flush = useCallback(() => {
-    if (timer.current) {
-      clearTimeout(timer.current)
-      timer.current = undefined
-    }
-    const d = dirRef.current
-    if (d && dirty.current) {
-      dirty.current = false
-      void saveBookmarkStore(d, latest.current)
-    }
-  }, [])
-
-  const persistSoon = useCallback(() => {
-    dirty.current = true
-    if (timer.current) clearTimeout(timer.current)
-    timer.current = setTimeout(flush, 400)
-  }, [flush])
-
-  useEffect(() => {
-    window.addEventListener('beforeunload', flush)
-    document.addEventListener('visibilitychange', flush)
-    return () => {
-      window.removeEventListener('beforeunload', flush)
-      document.removeEventListener('visibilitychange', flush)
-    }
-  }, [flush])
-
-  const mutate = useCallback(
-    (fn: (s: BookmarkStore) => BookmarkStore) => {
-      setStore((prev) => fn(prev))
-      persistSoon()
-    },
-    [persistSoon],
-  )
+  const { store, mutate } = useDataFile<BookmarkStore>(dir, {
+    load: loadBookmarkStore,
+    save: saveBookmarkStore,
+    empty: EMPTY_STORE,
+    label: 'bookmarks',
+  })
 
   /** Returns the new bookmark's id (so the UI can open it for editing). */
   const addBookmark = useCallback(

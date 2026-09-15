@@ -48,6 +48,10 @@ services:
       # Optional: keeps sign-ins valid across restarts. Without it, a restart
       # generates a new signing key and everyone signs in again.
       DECKLE_SESSION_SECRET: "${DECKLE_SESSION_SECRET:-}"
+      # Behind a reverse proxy (Caddy, Traefik, nginx)? Set "true" — or the
+      # number of proxies in a chain — so sign-in throttling sees each visitor
+      # rather than the proxy. Unset, X-Forwarded-For is ignored.
+      DECKLE_TRUST_PROXY: "${DECKLE_TRUST_PROXY:-}"
       # Bearer tokens for the /api/v1 REST API, so an agent or script can read
       # and write the library. Blank (the default) keeps the API switched off.
       # Format: "name:scope:secret" (scope "r" or "rw"), comma-separated.

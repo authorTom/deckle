@@ -16,6 +16,7 @@
 //   DECKLE_API_TOKEN    alias for a single read-write token.
 
 import crypto from 'node:crypto'
+import { createClientIp, createThrottle } from './throttle.mjs'
 
 /** Tokens shorter than this are too weak to be worth accepting at all. */
 const MIN_TOKEN_LENGTH = 16
@@ -71,40 +72,19 @@ function parseToken(raw, index, warn) {
   return { name, scope, digest: sha256(secret) }
 }
 
-export function createApiAuth(env = process.env, warn = console.warn) {
+export function createApiAuth(env = process.env, warn = console.warn, { now = Date.now } = {}) {
   const raw = [env.DECKLE_API_TOKENS, env.DECKLE_API_TOKEN].filter(Boolean).join(',')
   const tokens = raw
     .split(',')
     .map((entry, index) => parseToken(entry, index, warn))
     .filter(Boolean)
 
-  const attempts = new Map() // ip -> { count, resetAt }
-
-  function clientIp(req) {
-    const forwarded = req.headers['x-forwarded-for']
-    if (typeof forwarded === 'string' && forwarded) return forwarded.split(',')[0].trim()
-    return req.socket.remoteAddress || 'unknown'
-  }
-
-  function throttled(ip) {
-    const entry = attempts.get(ip)
-    if (!entry) return false
-    if (Date.now() > entry.resetAt) {
-      attempts.delete(ip)
-      return false
-    }
-    return entry.count >= MAX_ATTEMPTS
-  }
-
-  function recordFailure(ip) {
-    const now = Date.now()
-    const entry = attempts.get(ip)
-    if (!entry || now > entry.resetAt) {
-      attempts.set(ip, { count: 1, resetAt: now + LOCKOUT_WINDOW_MS })
-    } else {
-      entry.count += 1
-    }
-  }
+  const clientIp = createClientIp(env)
+  const throttle = createThrottle({
+    maxAttempts: MAX_ATTEMPTS,
+    windowMs: LOCKOUT_WINDOW_MS,
+    now,
+  })
 
   function bearer(req) {
     const header = req.headers.authorization
@@ -121,7 +101,7 @@ export function createApiAuth(env = process.env, warn = console.warn) {
     if (!tokens.length) return { error: 'disabled' }
 
     const ip = clientIp(req)
-    if (throttled(ip)) return { error: 'throttled' }
+    if (throttle.isThrottled(ip)) return { error: 'throttled' }
 
     const presented = bearer(req)
     if (!presented) return { error: 'missing' }
@@ -134,11 +114,11 @@ export function createApiAuth(env = process.env, warn = console.warn) {
       if (digestsMatch(digest, token.digest)) matched = token
     }
     if (!matched) {
-      recordFailure(ip)
+      throttle.recordFailure(ip)
       return { error: 'invalid' }
     }
 
-    attempts.delete(ip)
+    throttle.reset(ip)
     return { token: matched }
   }
 

@@ -238,6 +238,40 @@ function str(args: Record<string, unknown>, key: string): string {
   return v
 }
 
+/**
+ * A library path from the model, checked before it reaches a backend.
+ *
+ * The backends refuse ".." on their own today, but a tool argument is the
+ * least trusted input in the app — a note the model has just read can tell it
+ * what to type — so the tools don't rely on that. Writes are also kept out of
+ * hidden folders: those hold the recycle bin, version history, tasks and
+ * memory, and a "note" written there is invisible in the tree.
+ */
+function pathArg(
+  args: Record<string, unknown>,
+  key: string,
+  { mutating }: { mutating: boolean },
+): string {
+  const value = str(args, key)
+  const segments = value.split('/')
+  if (
+    !value.trim() ||
+    value.startsWith('/') ||
+    /[\u0000-\u001f\u007f\\]/.test(value) ||
+    segments.some((s) => s === '.' || s === '..')
+  ) {
+    throw new Error(
+      `"${value}" is not a usable library path. Use a relative path such as "Projects/idea.md".`,
+    )
+  }
+  if (mutating && segments.some((s) => s.startsWith('.'))) {
+    throw new Error(
+      `"${value}" is inside a hidden folder, which holds Deckle's own data. Write notes to a visible folder instead.`,
+    )
+  }
+  return value
+}
+
 /** Execute a tool against the library. Returns a text result for the model. */
 export async function executeTool(
   dir: FileSystemDirectoryHandle,
@@ -263,9 +297,12 @@ export async function executeTool(
       // Capped, because a note is a file on the user's disk and nothing stops
       // one being a megabyte. Unbounded, a single read_file could spend the
       // whole context window and take the conversation down with it.
-      return windowText(await library.readNote(dir, str(a, 'path')), READ_FILE_BUDGET)
+      return windowText(
+        await library.readNote(dir, pathArg(a, 'path', { mutating: false })),
+        READ_FILE_BUDGET,
+      )
     case 'write_file': {
-      const path = str(a, 'path')
+      const path = pathArg(a, 'path', { mutating: true })
       // Keep a restorable snapshot of anything the AI is about to overwrite.
       try {
         const before = await library.readNote(dir, path)
@@ -276,19 +313,28 @@ export async function executeTool(
       await library.writeNote(dir, path, str(a, 'content'))
       return `Saved ${path}`
     }
-    case 'create_folder':
-      await library.ensureFolder(dir, str(a, 'path'))
-      return `Created folder ${str(a, 'path')}`
-    case 'move_file':
-      await library.movePath(dir, str(a, 'from'), str(a, 'to'))
-      await history.retargetHistory(dir, str(a, 'from'), str(a, 'to'))
-      return `Moved ${str(a, 'from')} to ${str(a, 'to')}`
-    case 'delete_file':
-      await library.trashNote(dir, str(a, 'path'))
-      return `Moved ${str(a, 'path')} to the recycle bin`
-    case 'delete_folder':
-      await library.trashFolder(dir, str(a, 'path'))
-      return `Moved folder ${str(a, 'path')} to the recycle bin`
+    case 'create_folder': {
+      const path = pathArg(a, 'path', { mutating: true })
+      await library.ensureFolder(dir, path)
+      return `Created folder ${path}`
+    }
+    case 'move_file': {
+      const from = pathArg(a, 'from', { mutating: true })
+      const to = pathArg(a, 'to', { mutating: true })
+      await library.movePath(dir, from, to)
+      await history.retargetHistory(dir, from, to)
+      return `Moved ${from} to ${to}`
+    }
+    case 'delete_file': {
+      const path = pathArg(a, 'path', { mutating: true })
+      await library.trashNote(dir, path)
+      return `Moved ${path} to the recycle bin`
+    }
+    case 'delete_folder': {
+      const path = pathArg(a, 'path', { mutating: true })
+      await library.trashFolder(dir, path)
+      return `Moved folder ${path} to the recycle bin`
+    }
 
     // ---- Memory -----------------------------------------------------------
     case 'search_memory': {

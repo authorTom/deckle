@@ -33,6 +33,12 @@ const ERRORS = {
   404: jsonResponse('No such note, task, bookmark, or endpoint.', ref('Error')),
   409: jsonResponse('The target already exists.', ref('Error')),
   429: jsonResponse('Too many failed authentication attempts.', ref('Error')),
+  500: jsonResponse(
+    'The server could not complete the request. Code `store_unreadable` means the tasks or ' +
+      'bookmarks file exists but cannot be read (invalid JSON, or written by a newer Deckle); ' +
+      'it is left untouched and nothing is written until a person repairs it.',
+    ref('Error'),
+  ),
 }
 
 /** Paths that read; only the write ones need a read-write token. */
@@ -510,7 +516,10 @@ export function buildOpenApi(libraryName) {
                 properties: {
                   completed: {
                     type: 'boolean',
-                    description: 'true completes the task, false reopens it.',
+                    description:
+                      'true completes the task — except a recurring task with a due date, whose ' +
+                      'due date moves to its next occurrence instead, exactly as ticking it in the ' +
+                      'app does. false reopens a completed task.',
                   },
                 },
               },
@@ -558,7 +567,11 @@ export function buildOpenApi(libraryName) {
             required: ['name'],
             properties: {
               name: { type: 'string' },
-              color: { type: 'string', description: 'CSS colour. Assigned automatically if omitted.' },
+              color: {
+                type: 'string',
+                pattern: '^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$',
+                description: 'Hex colour, e.g. "#30a46c". Assigned automatically if omitted.',
+              },
             },
           }),
           responses: { 201: jsonResponse('The created project.', ref('Project')) },
@@ -640,7 +653,14 @@ export function buildOpenApi(libraryName) {
           requestBody: jsonBody({
             type: 'object',
             required: ['name'],
-            properties: { name: { type: 'string' }, color: { type: 'string' } },
+            properties: {
+              name: { type: 'string' },
+              color: {
+                type: 'string',
+                pattern: '^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$',
+                description: 'Hex colour, e.g. "#0091ff". Assigned automatically if omitted.',
+              },
+            },
           }),
           responses: { 201: jsonResponse('The created collection.', ref('Collection')) },
         }),
@@ -824,7 +844,7 @@ export function buildOpenApi(libraryName) {
             due: {
               type: ['string', 'null'],
               pattern: '^\\d{4}-\\d{2}-\\d{2}$',
-              description: 'Local due date, or null for undated.',
+              description: 'A real local calendar date ("2026-02-31" is refused), or null for undated.',
             },
             priority: {
               type: 'integer',

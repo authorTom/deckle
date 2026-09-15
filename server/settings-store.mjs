@@ -25,6 +25,7 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { randomBytes } from 'node:crypto'
 
 const FILE = 'assistant.json'
 
@@ -68,12 +69,18 @@ export function createSettingsStore(stateDir) {
       if (!value || typeof value !== 'object' || Array.isArray(value)) {
         throw new InvalidSettingsError('settings must be an object')
       }
-      const payload = JSON.stringify(value, null, 2)
-      if (Buffer.byteLength(payload) > MAX_SETTINGS_BYTES) {
+      // Measured compact, the way the request carried it. Measuring the
+      // indented copy refused settings that had arrived comfortably inside
+      // the same limit, once the indentation pushed them over.
+      if (Buffer.byteLength(JSON.stringify(value)) > MAX_SETTINGS_BYTES) {
         throw new InvalidSettingsError('settings too large')
       }
+      const payload = JSON.stringify(value, null, 2)
       await fs.mkdir(stateDir, { recursive: true, mode: 0o700 })
-      const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+      // Random, not just pid + time: two devices saving in the same
+      // millisecond would otherwise share a temp file, and one rename would
+      // then fail on a file the other had already moved.
+      const tmp = `${file}.${process.pid}.${Date.now()}.${randomBytes(6).toString('hex')}.tmp`
       try {
         // 0600 from the moment it exists: never briefly world-readable.
         await fs.writeFile(tmp, payload, { mode: 0o600 })
