@@ -1,10 +1,11 @@
 // Note version history, stored in a hidden ".history" folder at the library
 // root (skipped by buildTree, like ".trash"). Each snapshot is a full copy of
-// a note's content taken before it is overwritten — by the AI assistant, by a
-// restore, or periodically while the user edits. A JSON index records which
-// note each snapshot belongs to and why it was taken.
+// a note's content taken before it is overwritten — by an agent writing through
+// the API, by a restore, or periodically while the user edits. A JSON index
+// records which note each snapshot belongs to and why it was taken.
 
-export type SnapshotReason = 'edit' | 'ai' | 'restore'
+/** `ai` is only ever read: Deckle 2.x's assistant wrote it before each edit. */
+export type SnapshotReason = 'edit' | 'agent' | 'ai' | 'restore'
 
 export interface HistoryItem {
   /** File name within the .history folder (unique). */

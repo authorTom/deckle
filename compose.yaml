@@ -52,12 +52,19 @@ services:
       # number of proxies in a chain — so sign-in throttling sees each visitor
       # rather than the proxy. Unset, X-Forwarded-For is ignored.
       DECKLE_TRUST_PROXY: "${DECKLE_TRUST_PROXY:-}"
-      # Bearer tokens for the /api/v1 REST API, so an agent or script can read
-      # and write the library. Blank (the default) keeps the API switched off.
+      # Bearer tokens for the /api/v1 REST API and the MCP server at
+      # /api/v1/mcp, so an agent such as Hermes can read and write the library.
+      # Blank (the default) keeps both switched off.
       # Format: "name:scope:secret" (scope "r" or "rw"), comma-separated.
       DECKLE_API_TOKENS: "${DECKLE_API_TOKENS:-}"
       # Origins allowed to call /api/v1 from a browser. Rarely needed.
       DECKLE_API_CORS_ORIGINS: "${DECKLE_API_CORS_ORIGINS:-}"
+      # The largest single file the library accepts, in MB (default 100).
+      DECKLE_MAX_FILE_MB: "${DECKLE_MAX_FILE_MB:-}"
+      # The folder projects live in (default "Projects").
+      DECKLE_PROJECTS_DIR: "${DECKLE_PROJECTS_DIR:-}"
+      # Activity and project-log times use this zone; unset, they are UTC.
+      TZ: "${TZ:-}"
 
     volumes:
       # Your notes. A named volume survives `docker compose down` and image

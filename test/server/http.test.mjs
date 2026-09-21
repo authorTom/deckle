@@ -23,7 +23,11 @@ describe('static serving', () => {
     const csp = res.headers.get('content-security-policy')
     expect(csp).toContain("script-src 'self'")
     expect(csp).toContain("frame-ancestors 'none'")
-    expect(csp).toContain("object-src 'none'")
+    // Nothing but this server: the page used to be allowed to call AI providers.
+    expect(csp).toContain("connect-src 'self';")
+    // File previews are blob URLs the app mints itself — never another origin.
+    expect(csp).toContain("frame-src 'self' blob:")
+    expect(csp).not.toMatch(/(frame|object|media)-src[^;]*(https?:|\*)/)
   })
 
   it('falls back to the app for client routes, but not for a missing asset', async () => {
@@ -150,10 +154,8 @@ describe('server library without a password', () => {
     expect((await s.fetch('/api/server-library')).status).toBe(200)
   })
 
-  it('declines to keep assistant settings without a password', async () => {
-    const res = await s.fetch('/api/assistant-settings', { headers: APP })
-    expect(res.status).toBe(409)
-    expect(await res.json()).toMatchObject({ error: 'password_required' })
+  it('has no assistant settings endpoint any more', async () => {
+    expect((await s.fetch('/api/assistant-settings', { headers: APP })).status).toBe(404)
   })
 })
 
@@ -180,7 +182,6 @@ describe('server library with a password', () => {
       enabled: true,
       authRequired: true,
       authenticated: false,
-      sharedSettings: true,
     })
   })
 
@@ -228,43 +229,24 @@ describe('server library with a password', () => {
     expect(res.headers.get('set-cookie')).toContain('Max-Age=0')
   })
 
-  it('shares assistant settings only with a signed-in app, and never through the file API', async () => {
+  it('keeps a 2.x assistant settings file out of reach, even signed in', async () => {
+    // Deckle 2.x stored the assistant's provider key here. An upgraded volume
+    // may still hold it, and it must never be served.
+    await fs.mkdir(path.join(s.libraryDir, '.deckle-state'), { recursive: true })
+    await fs.writeFile(
+      path.join(s.libraryDir, '.deckle-state', 'assistant.json'),
+      '{"anthropicKey":"sk-ant-test"}',
+    )
     const cookie = cookieFrom(await login({ password: 'hunter2-hunter2' }))
-    const settings = { provider: 'anthropic', anthropicKey: 'sk-ant-test' }
 
-    const anonymous = await s.fetch('/api/assistant-settings', {
-      method: 'PUT',
-      headers: { ...APP, ...json },
-      body: JSON.stringify({ settings }),
-    })
-    expect(anonymous.status).toBe(401)
-
-    const saved = await s.fetch('/api/assistant-settings', {
-      method: 'PUT',
-      headers: { ...APP, ...json, cookie },
-      body: JSON.stringify({ settings }),
-    })
-    expect(saved.status).toBe(200)
-
-    const read = await s.fetch('/api/assistant-settings', { headers: { ...APP, cookie } })
-    expect(await read.json()).toEqual({ settings })
-
-    const file = path.join(s.libraryDir, '.deckle-state', 'assistant.json')
-    expect((await fs.stat(file)).mode & 0o777).toBe(0o600)
-
+    expect((await s.fetch('/api/assistant-settings', { headers: { ...APP, cookie } })).status).toBe(404)
     for (const probe of ['.deckle-state/assistant.json', './.deckle-state/assistant.json']) {
       const res = await s.fetch(`/api/library/file?path=${encodeURIComponent(probe)}`, {
         headers: { ...APP, cookie },
       })
       expect(res.status).toBe(400)
+      expect(await res.text()).not.toContain('sk-ant')
     }
-
-    const invalid = await s.fetch('/api/assistant-settings', {
-      method: 'PUT',
-      headers: { ...APP, ...json, cookie },
-      body: JSON.stringify({ settings: ['not', 'an', 'object'] }),
-    })
-    expect(invalid.status).toBe(400)
   })
 })
 

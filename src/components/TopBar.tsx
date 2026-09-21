@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import {
+  Activity,
   Columns2,
+  Download,
   FileDown,
   FileText,
   FolderInput,
@@ -13,7 +15,6 @@ import {
   Palette,
   Plus,
   Search,
-  Sparkles,
   Sun,
   Trash,
   Upload,
@@ -42,11 +43,16 @@ interface TopBarProps {
   onExportPdf: () => void
   /** Open the dialog that files this note in another folder. */
   onMoveNote: () => void
+  /** Download the focused file that isn't a note, as it is. */
+  onDownloadFile: () => void
   onOpenHistory: () => void
   onToggleSidebar: () => void
   onToggleFocus: () => void
   onOpenPalette: () => void
-  onOpenAssistant: () => void
+  /** Open the agent activity feed. */
+  onOpenActivity: () => void
+  /** Changes agents made since the person last looked. */
+  activityUnseen: number
   onOpenTrash: () => void
   onOpenImport: () => void
   onOpenExport: () => void
@@ -60,12 +66,8 @@ interface TopBarProps {
   lastSavedAt: number | null
   theme: Theme
   onToggleTheme: (e: React.MouseEvent) => void
-  hasNote: boolean
-  /**
-   * Background runs that have stopped for a person. Shown on the assistant
-   * button, which is the only trace of a parked run once both panels are shut.
-   */
-  runsNeedingYou: number
+  /** What the focused tab holds: a note, some other file, or nothing. */
+  focusedKind: 'note' | 'file' | null
 }
 
 /**
@@ -83,11 +85,13 @@ export default function TopBar({
   onSaveMarkdown,
   onExportPdf,
   onMoveNote,
+  onDownloadFile,
   onOpenHistory,
   onToggleSidebar,
   onToggleFocus,
   onOpenPalette,
-  onOpenAssistant,
+  onOpenActivity,
+  activityUnseen,
   onOpenTrash,
   onOpenImport,
   onOpenExport,
@@ -100,9 +104,10 @@ export default function TopBar({
   lastSavedAt,
   theme,
   onToggleTheme,
-  hasNote,
-  runsNeedingYou,
+  focusedKind,
 }: TopBarProps) {
+  const hasNote = focusedKind === 'note'
+  const hasItem = focusedKind !== null
   // Local state for instant typing; renaming the file happens on commit.
   // The note it was typed for travels with it, along with the name that note
   // started out with — that pair is what decides whether there is a rename to
@@ -154,7 +159,7 @@ export default function TopBar({
       id: 'move',
       label: 'Move to another folder…',
       Icon: FolderInput,
-      disabled: !hasNote,
+      disabled: !hasItem,
       separated: true,
       run: onMoveNote,
     },
@@ -165,13 +170,20 @@ export default function TopBar({
       disabled: !hasNote,
       run: onOpenHistory,
     },
-    {
-      id: 'download-md',
-      label: 'Download a copy (.md)',
-      Icon: FileText,
-      disabled: !hasNote,
-      run: onSaveMarkdown,
-    },
+    focusedKind === 'file'
+      ? {
+          id: 'download-file',
+          label: 'Download this file',
+          Icon: Download,
+          run: onDownloadFile,
+        }
+      : {
+          id: 'download-md',
+          label: 'Download a copy (.md)',
+          Icon: FileText,
+          disabled: !hasNote,
+          run: onSaveMarkdown,
+        },
     {
       id: 'export-pdf',
       label: 'Export to PDF',
@@ -181,7 +193,7 @@ export default function TopBar({
     },
     {
       id: 'import',
-      label: 'Import Markdown or ZIP…',
+      label: 'Import files…',
       Icon: Upload,
       separated: true,
       run: onOpenImport,
@@ -232,7 +244,7 @@ export default function TopBar({
             }
           }}
           placeholder="Untitled"
-          disabled={!hasNote}
+          disabled={!hasItem}
           // Names the field for what it actually is. The heading inside the
           // document is the note's title; this is the file it lives in.
           aria-label="File name"
@@ -270,23 +282,21 @@ export default function TopBar({
         </button>
         <button
           type="button"
-          className="icon-btn assistant-trigger"
-          onClick={onOpenAssistant}
+          className="icon-btn activity-trigger"
+          onClick={onOpenActivity}
           title={
-            runsNeedingYou
-              ? `Clever Trevor — ${runsNeedingYou} background ${
-                  runsNeedingYou === 1 ? 'run needs' : 'runs need'
-                } you`
-              : `Clever Trevor (${MOD_KEY}J)`
+            activityUnseen
+              ? `Activity — ${activityUnseen} new ${activityUnseen === 1 ? 'change' : 'changes'} by agents`
+              : 'Activity'
           }
-          aria-label={
-            runsNeedingYou
-              ? `Clever Trevor, ${runsNeedingYou} background runs need you`
-              : 'Clever Trevor'
-          }
+          aria-label={activityUnseen ? `Activity, ${activityUnseen} new` : 'Activity'}
         >
-          <Sparkles size={18} />
-          {runsNeedingYou > 0 && <span className="icon-btn-badge" aria-hidden="true" />}
+          <Activity size={18} />
+          {activityUnseen > 0 && (
+            <span className="icon-btn-count" aria-hidden="true">
+              {activityUnseen > 99 ? '99+' : activityUnseen}
+            </span>
+          )}
         </button>
         <button
           type="button"

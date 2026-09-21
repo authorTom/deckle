@@ -4,9 +4,9 @@ import {
   Bookmark,
   ChevronRight,
   FilePlus,
-  FileText,
   Folder,
   FolderInput,
+  FolderKanban,
   FolderOpen,
   FolderPlus,
   FolderUp,
@@ -23,6 +23,7 @@ import {
 import OverflowMenu, { type MenuItem } from './OverflowMenu'
 import type { TreeNode } from '../fs/library'
 import type { SearchResult } from '../hooks/useNotes'
+import { iconFor } from '../lib/fileTypes'
 import { dragHasFiles } from '../lib/importMarkdown'
 import { rectOf, type FlightOrigin } from '../lib/motion'
 
@@ -53,6 +54,7 @@ interface SidebarProps {
   onDelete: (id: string) => void
   onSwitchLibrary: () => void
   onOpenTrash: () => void
+  onOpenProjects: () => void
   onOpenTasks: () => void
   onOpenBookmarks: () => void
   /** Open the file picker (App owns the inputs, so the palette can use them too). */
@@ -73,8 +75,9 @@ const SPRING_MS = 550
 /** A row as actually drawn: the tree flattened down to what's currently visible. */
 interface Row {
   id: string
-  kind: 'folder' | 'file'
-  /** Folder name, or note title. */
+  /** A folder, a note ('file'), or any other file ('asset'). */
+  kind: 'folder' | 'file' | 'asset'
+  /** Folder name, note title, or a file's whole name. */
   label: string
   depth: number
 }
@@ -163,6 +166,7 @@ export default function Sidebar({
   onDelete,
   onSwitchLibrary,
   onOpenTrash,
+  onOpenProjects,
   onOpenTasks,
   onOpenBookmarks,
   onOpenImport,
@@ -222,7 +226,7 @@ export default function Sidebar({
           out.push({ id: node.id, kind: 'folder', label: node.name, depth })
           if (expanded.has(node.id)) walk(node.children, depth + 1)
         } else {
-          out.push({ id: node.id, kind: 'file', label: node.title, depth })
+          out.push({ id: node.id, kind: node.kind, label: node.title, depth })
         }
       }
     }
@@ -430,6 +434,8 @@ export default function Sidebar({
   const renderRow = (row: Row) => {
     const indent = { paddingLeft: 8 + row.depth * 14 }
     const isFolder = row.kind === 'folder'
+    const noun = isFolder ? 'folder' : row.kind === 'asset' ? 'file' : 'note'
+    const RowIcon = isFolder ? null : iconFor({ kind: row.kind as 'file' | 'asset', name: row.label })
     const isOpen = isFolder && expanded.has(row.id)
     // Where a drop on this row lands, and which row lights up to say so: a note
     // row hands the drop to its folder, so that folder's row shows the target.
@@ -442,7 +448,7 @@ export default function Sidebar({
           key={`edit-${row.id}`}
           defaultValue={row.label}
           depth={row.depth}
-          label={isFolder ? 'Folder name' : 'Note title'}
+          label={isFolder ? 'Folder name' : row.kind === 'asset' ? 'File name' : 'Note title'}
           onCommit={(value) => commitRename(row, value)}
           onCancel={() => setRenaming(null)}
         />
@@ -462,7 +468,7 @@ export default function Sidebar({
           style={indent}
           className={[
             'tree-row',
-            isFolder ? 'folder-row' : 'file-row',
+            isFolder ? 'folder-row' : row.kind === 'asset' ? 'file-row asset-row' : 'file-row',
             row.id === activeId ? 'active' : '',
             dragOverId === row.id ? 'drop-target' : '',
             draggingId === row.id ? 'dragging' : '',
@@ -517,7 +523,7 @@ export default function Sidebar({
                 <Folder size={16} />
               )
             ) : (
-              <FileText size={15} />
+              RowIcon && <RowIcon size={15} />
             )}
           </span>
           <span className="tree-label">{row.label}</span>
@@ -572,7 +578,7 @@ export default function Sidebar({
               type="button"
               className="tree-action"
               tabIndex={-1}
-              title={isFolder ? 'Rename folder' : 'Rename note'}
+              title={`Rename ${noun}`}
               aria-label={`Rename ${row.label}`}
               onClick={(e) => {
                 e.stopPropagation()
@@ -585,7 +591,7 @@ export default function Sidebar({
               type="button"
               className="tree-action danger"
               tabIndex={-1}
-              title={isFolder ? 'Delete folder' : 'Delete note'}
+              title={`Delete ${noun}`}
               aria-label={`Delete ${row.label}`}
               onClick={(e) => {
                 e.stopPropagation()
@@ -616,7 +622,7 @@ export default function Sidebar({
     if (results.length === 0) {
       return (
         <div className="sidebar-empty">
-          No note contains that — titles, paths and contents were all checked.
+          Nothing matches — note titles and text, file names and folders were all checked.
         </div>
       )
     }
@@ -625,7 +631,9 @@ export default function Sidebar({
         {/* A row rather than a button, because it carries a button of its own:
             having found a note by searching is exactly when moving it is
             easiest to ask for, and a note nested inside a button is invalid. */}
-        {results.map((r) => (
+        {results.map((r) => {
+          const ResultIcon = iconFor({ kind: r.kind, name: r.name })
+          return (
           <div
             key={r.id}
             role="button"
@@ -646,7 +654,7 @@ export default function Sidebar({
             }}
           >
             <span className="tree-icon">
-              <FileText size={15} />
+              <ResultIcon size={15} />
             </span>
             <span className="search-result-body">
               <span className="tree-label">{r.title}</span>
@@ -673,7 +681,8 @@ export default function Sidebar({
               </button>
             </span>
           </div>
-        ))}
+          )
+        })}
       </div>
     )
   }
@@ -694,7 +703,7 @@ export default function Sidebar({
     },
     {
       id: 'import',
-      label: 'Import Markdown or a ZIP…',
+      label: 'Import files or a ZIP…',
       Icon: Upload,
       separated: true,
       run: onOpenImport,
@@ -727,6 +736,15 @@ export default function Sidebar({
           {libraryName ?? 'Notes'}
         </span>
         <div className="sidebar-header-actions">
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={onOpenProjects}
+            title="Projects"
+            aria-label="Projects"
+          >
+            <FolderKanban size={18} />
+          </button>
           <button
             type="button"
             className="icon-btn"
@@ -763,8 +781,8 @@ export default function Sidebar({
         <input
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
-          placeholder="Search notes…"
-          aria-label="Search notes"
+          placeholder="Search notes and files…"
+          aria-label="Search notes and files"
         />
         {query && (
           <button
@@ -796,9 +814,9 @@ export default function Sidebar({
         >
           {rows.length === 0 && creatingIn === null ? (
             <div className="sidebar-empty">
-              No notes in this folder yet
+              Nothing in this library yet
               <span className="sidebar-empty-hint">
-                Drop <code>.md</code> files here to import them.
+                Drop notes, documents or whole folders here to add them.
               </span>
             </div>
           ) : (
@@ -822,7 +840,7 @@ export default function Sidebar({
           type="button"
           className="sidebar-footer-btn"
           onClick={onOpenImport}
-          title="Import Markdown files, or a ZIP of them, into this library"
+          title="Import notes and files, or a ZIP of them, into this library"
         >
           <Upload size={15} />
           Import
@@ -831,8 +849,8 @@ export default function Sidebar({
           type="button"
           className="sidebar-footer-btn icon-only"
           onClick={onOpenFolderImport}
-          title="Import a whole folder of notes"
-          aria-label="Import a folder of notes"
+          title="Import a whole folder"
+          aria-label="Import a folder"
         >
           <FolderUp size={15} />
         </button>

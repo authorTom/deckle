@@ -28,8 +28,8 @@ export function isDataDir(name: string): boolean {
  * `getFileHandle` takes a *name*, not a path: give it "runs/index.json" and the
  * File System Access API throws "Name is not allowed". The server library's
  * adapter resolves paths by URL and never noticed, so a nested file worked
- * there and failed on every local and in-browser library — which is exactly
- * how the assistant's queue came to write run records it could never index.
+ * there and failed on every local and in-browser library — which is how a
+ * nested data file once got written where it could never be read back.
  * Anything nested walks its directories first, here, once.
  */
 async function fileAt(

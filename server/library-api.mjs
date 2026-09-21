@@ -4,16 +4,17 @@
 // It mirrors the handful of operations the browser's File System Access API
 // offers, because the client adapter (src/fs/remote.ts) presents these
 // endpoints *as* a FileSystemDirectoryHandle. Keeping the two in step is what
-// lets the rest of the app stay backend-agnostic — notes, history, tasks,
-// bookmarks and the AI tools all go through the same handle interface.
+// lets the rest of the app stay backend-agnostic — notes, files, history,
+// tasks and bookmarks all go through the same handle interface.
 //
 // Endpoints (all library-relative paths in the ?path= query parameter):
-//   GET    /api/library/tree    recursive note tree (one round trip per refresh)
+//   GET    /api/library/tree    recursive tree of notes and files (one round trip)
 //   GET    /api/library/list    shallow directory listing, including dotfiles
 //   GET    /api/library/stat    entry kind + mtime, 404 when missing
 //   GET    /api/library/file    file contents
 //   PUT    /api/library/file    write file contents (creates parent folders)
 //   POST   /api/library/dir     create a directory (mkdir -p)
+//   POST   /api/library/move    rename a file or folder (&to= the destination)
 //   DELETE /api/library/entry   remove a file or directory
 
 import fs from 'node:fs/promises'
@@ -34,14 +35,14 @@ const MD_EXT = /\.md$/i
 /**
  * A folder inside the library root that this API pretends does not exist.
  *
- * The server keeps its own state there (the shared assistant settings, and the
- * API key in them), and it sits under the library directory only because that
- * is the volume a self-hoster actually mounts — not because it is part of the
- * library. Every way out of this module passes through `safePath`, `walk` or
- * `list`, so denying it in those places is what keeps it out of: the file API,
- * the client's export walk (which lists its way through the remote handle), the
- * server's own export walk, the machine API, and the assistant's read_file
- * tool — none of which have any business reading a key.
+ * It is the server's own state, not part of the library. Deckle 2.x kept the
+ * AI assistant's settings there — a provider API key among them — and an
+ * upgraded volume may still hold that file, so the folder stays invisible even
+ * though nothing is written to it any more. Every way out of this module
+ * passes through `safePath`, `walk` or `list`, so denying it in those places is
+ * what keeps it out of: the file API, the client's export walk (which lists its
+ * way through the remote handle), the server's own export walk, the machine
+ * API and MCP — none of which have any business reading a key.
  *
  * Set DECKLE_STATE_DIR to move the state somewhere else entirely; this name
  * stays reserved either way, so a library can't grow a folder that would
@@ -49,10 +50,27 @@ const MD_EXT = /\.md$/i
  */
 export const RESERVED_DIR = '.deckle-state'
 
-/** Notes are text; this cap stops a single request filling the volume. */
-const MAX_FILE_BYTES = 32 * 1024 * 1024
+/**
+ * The largest single file the library accepts, unless DECKLE_MAX_FILE_MB says
+ * otherwise. Notes are small, but the library also holds what an agent
+ * produced — PDFs, spreadsheets, images — so this is sized for documents
+ * rather than prose. It exists so one request cannot fill the volume.
+ */
+export const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024
 
-/** Thrown when an upload exceeds MAX_FILE_BYTES mid-stream. */
+/**
+ * Operating-system clutter that is never anyone's work. Dotfiles (.DS_Store,
+ * ._resource forks) are already skipped by the leading-dot rule.
+ */
+const CLUTTER = new Set(['thumbs.db', 'desktop.ini', 'icon\r'])
+
+/** The lower-case extension of a file name, without the dot ('' if none). */
+export function extensionOf(name) {
+  const dot = name.lastIndexOf('.')
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
+}
+
+/** Thrown when an upload exceeds the size cap mid-stream. */
 export class TooLargeError extends Error {}
 
 /** Abort a stream once it has passed `limit` bytes (Content-Length can lie). */
@@ -90,11 +108,15 @@ async function statOrNull(abs) {
 
 /**
  * @param {string} rootDir  the library directory
- * @param {{ reservedPaths?: string[] }} [options]
- *   extra absolute paths to hide — the state directory, when DECKLE_STATE_DIR
- *   puts it somewhere inside the library other than RESERVED_DIR
+ * @param {{ reservedPaths?: string[], maxFileBytes?: number }} [options]
+ *   reservedPaths: extra absolute paths to hide — the state directory, when
+ *   DECKLE_STATE_DIR puts it somewhere inside the library other than
+ *   RESERVED_DIR. maxFileBytes: the per-file size cap.
  */
-export function createLibraryApi(rootDir, { reservedPaths = [] } = {}) {
+export function createLibraryApi(
+  rootDir,
+  { reservedPaths = [], maxFileBytes = DEFAULT_MAX_FILE_BYTES } = {},
+) {
   const root = path.resolve(rootDir)
 
   // Compared case-insensitively. A library bind-mounted from macOS or Windows
@@ -134,10 +156,12 @@ export function createLibraryApi(rootDir, { reservedPaths = [] } = {}) {
 
   /**
    * Recursive walk producing exactly the shape `buildTree` in src/fs/library.ts
-   * builds by hand: folders first, then files, both sorted by display name,
-   * with dotfiles skipped and non-.md files ignored. Ids are relative to the
-   * directory being walked; the client re-prefixes them if it asked for a
-   * subfolder.
+   * builds by hand: folders first, then notes and files together, each group
+   * sorted by what the tree shows (a note's title, a file's name), with
+   * dotfiles skipped. A `.md` file is a note; anything else is a file — an
+   * image, a PDF, a spreadsheet — carried as `kind: 'asset'` so code that only
+   * understands notes can tell the two apart. Ids are relative to the directory
+   * being walked; the client re-prefixes them if it asked for a subfolder.
    */
   async function walk(abs, prefix) {
     const folders = []
@@ -164,24 +188,38 @@ export function createLibraryApi(rootDir, { reservedPaths = [] } = {}) {
           name: entry.name,
           children: await walk(childAbs, id),
         })
-      } else if (entry.isFile() && MD_EXT.test(entry.name)) {
-        // A note deleted mid-walk is simply not in the tree, rather than a
+      } else if (entry.isFile()) {
+        if (CLUTTER.has(entry.name.toLowerCase())) continue
+        // A file deleted mid-walk is simply not in the tree, rather than a
         // 404 for the whole library.
         const stat = await statOrNull(childAbs)
         if (!stat) continue
-        files.push({
-          kind: 'file',
-          id,
-          name: entry.name,
-          title: entry.name.replace(MD_EXT, ''),
-          updatedAt: Math.round(stat.mtimeMs),
-        })
+        if (MD_EXT.test(entry.name)) {
+          files.push({
+            kind: 'file',
+            id,
+            name: entry.name,
+            title: entry.name.replace(MD_EXT, ''),
+            updatedAt: Math.round(stat.mtimeMs),
+          })
+        } else {
+          files.push({
+            kind: 'asset',
+            id,
+            name: entry.name,
+            // What the tree and tabs show: a file is known by its whole name.
+            title: entry.name,
+            ext: extensionOf(entry.name),
+            size: stat.size,
+            updatedAt: Math.round(stat.mtimeMs),
+          })
+        }
       }
       // Symlinks and other entry kinds are ignored rather than followed.
     }
 
     folders.sort((a, b) => a.name.localeCompare(b.name))
-    files.sort((a, b) => a.title.localeCompare(b.title))
+    files.sort((a, b) => labelOf(a).localeCompare(labelOf(b)))
     return [...folders, ...files]
   }
 
@@ -273,7 +311,7 @@ export function createLibraryApi(rootDir, { reservedPaths = [] } = {}) {
       await fs.mkdir(path.dirname(abs), { recursive: true })
       const tmp = tempNameFor(abs, 'upload')
       try {
-        await pipeline(stream, limitBytes(MAX_FILE_BYTES), createWriteStream(tmp))
+        await pipeline(stream, limitBytes(maxFileBytes), createWriteStream(tmp))
         await fs.rename(tmp, abs)
       } catch (err) {
         await fs.rm(tmp, { force: true })
@@ -296,8 +334,11 @@ export function createLibraryApi(rootDir, { reservedPaths = [] } = {}) {
       return await fs.readFile(abs)
     },
 
-    /** Write UTF-8 text, creating parent folders. Same atomic rename as
-     *  `writeFile`, so an interrupted write can't truncate an existing note. */
+    /**
+     * Write UTF-8 text — or a Buffer, written as-is — creating parent folders.
+     * Same atomic rename as `writeFile`, so an interrupted write can't truncate
+     * an existing note.
+     */
     async writeText(rel, text) {
       const abs = await safePath(rel)
       await fs.mkdir(path.dirname(abs), { recursive: true })
@@ -329,6 +370,43 @@ export function createLibraryApi(rootDir, { reservedPaths = [] } = {}) {
       await fs.mkdir(abs, { recursive: true })
     },
 
+    /**
+     * Move a file within the library, creating the destination's folders.
+     *
+     * A rename, not a copy: the library is one volume, so moving a 90 MB PDF
+     * into the recycle bin costs the same as moving a note, and a file can
+     * never exist half-copied in two places. Refuses to replace anything
+     * already at `toRel` — the callers pick a free name first.
+     */
+    async rename(fromRel, toRel) {
+      const from = await safePath(fromRel)
+      const to = await safePath(toRel)
+      if (from === root || to === root) throw new BadPathError('cannot move the library root')
+      if (holdsReserved(from)) throw new BadPathError(`cannot move ${RESERVED_DIR}`)
+      const stat = await fs.stat(from)
+      if (from.toLowerCase() !== to.toLowerCase() && (await statOrNull(to))) {
+        const err = new Error('destination exists')
+        err.code = 'EEXIST'
+        throw err
+      }
+      await fs.mkdir(path.dirname(to), { recursive: true })
+      await fs.rename(from, to)
+      return { kind: stat.isDirectory() ? 'directory' : 'file' }
+    },
+
+    /**
+     * Append UTF-8 text to a file, creating it and its folders if need be.
+     * Used for append-only logs, where rewriting the whole file per line
+     * would be quadratic.
+     */
+    async appendText(rel, text) {
+      const abs = await safePath(rel)
+      await fs.mkdir(path.dirname(abs), { recursive: true })
+      await fs.appendFile(abs, text, 'utf8')
+      const stat = await fs.stat(abs)
+      return { lastModified: Math.round(stat.mtimeMs), size: stat.size }
+    },
+
     async remove(rel, recursive) {
       const abs = await safePath(rel)
       if (abs === root) throw new BadPathError('cannot remove the library root')
@@ -349,6 +427,11 @@ export function createLibraryApi(rootDir, { reservedPaths = [] } = {}) {
       }
     },
 
-    maxFileBytes: MAX_FILE_BYTES,
+    maxFileBytes,
   }
+}
+
+/** What the tree shows for an entry — a note's title, a file's full name. */
+function labelOf(node) {
+  return node.title
 }

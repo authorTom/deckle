@@ -4,24 +4,28 @@ import * as history from '../../src/fs/history'
 import { createMemFs, get, listAll, put, sleep } from '../helpers/memfs'
 
 describe('buildTree', () => {
-  it('lists folders first, then notes, skipping hidden entries and other files', async () => {
+  it('lists folders first, then notes and files by name, skipping hidden entries and clutter', async () => {
     const dir = createMemFs()
     await put(dir, 'b.md', 'b')
     await put(dir, 'A.md', 'a')
     await put(dir, 'photo.png', 'x')
+    await put(dir, 'Thumbs.db', 'x')
     await put(dir, '.trash/gone.md', 'x')
     await put(dir, 'Zeta/z.md', 'z')
     await put(dir, 'Alpha/Inner/deep.md', 'd')
     await dir.getDirectoryHandle('Empty', { create: true })
 
     const tree = await library.buildTree(dir)
-    expect(tree.map((n) => n.id)).toEqual(['Alpha', 'Empty', 'Zeta', 'A.md', 'b.md'])
+    expect(tree.map((n) => n.id)).toEqual(['Alpha', 'Empty', 'Zeta', 'A.md', 'b.md', 'photo.png'])
+    expect(tree.at(-1)).toMatchObject({ kind: 'asset', name: 'photo.png', title: 'photo.png', ext: 'png', size: 1 })
+    // Notes-only consumers are never handed a file.
     expect(library.flattenFiles(tree).map((f) => f.id)).toEqual([
       'Alpha/Inner/deep.md',
       'Zeta/z.md',
       'A.md',
       'b.md',
     ])
+    expect(library.flattenAssets(tree).map((f) => f.id)).toEqual(['photo.png'])
   })
 })
 
@@ -59,9 +63,10 @@ describe('notes', () => {
     expect(await listAll(dir)).toEqual(['Note.md'])
     expect(await get(dir, 'Note.md')).toBe('precious')
 
-    await library.movePath(dir, 'Note.md', 'NOTE.md')
-    expect(await listAll(dir)).toEqual(['NOTE.md'])
-    expect(await get(dir, 'NOTE.md')).toBe('precious')
+    await put(dir, 'scan.pdf', '%PDF')
+    expect(await library.renameAsset(dir, 'scan.pdf', 'SCAN')).toBe('SCAN.pdf')
+    expect(await listAll(dir)).toEqual(['Note.md', 'SCAN.pdf'])
+    expect(await get(dir, 'SCAN.pdf')).toBe('%PDF')
   })
 
   it('moves a note into another folder without overwriting', async () => {
@@ -140,14 +145,15 @@ describe('recycle bin', () => {
     expect(await library.listTrash(dir)).toEqual([])
   })
 
-  it('bins every note in a folder, then removes the folder', async () => {
+  it('bins everything in a folder — files too — then removes the folder', async () => {
     const dir = createMemFs()
     await put(dir, 'Old/a.md', 'a')
     await put(dir, 'Old/Sub/b.md', 'b')
     await put(dir, 'Old/Sub/pic.png', 'png')
-    expect(await library.trashFolder(dir, 'Old')).toBe(2)
+    expect(await library.trashFolder(dir, 'Old')).toBe(3)
     expect((await library.listTrash(dir)).map((i) => i.originalPath).sort()).toEqual([
       'Old/Sub/b.md',
+      'Old/Sub/pic.png',
       'Old/a.md',
     ])
     expect((await library.buildTree(dir)).map((n) => n.id)).toEqual([])
@@ -204,5 +210,52 @@ describe('version history', () => {
     })
     await expect(history.snapshotNote(dir, 'a.md', 'x', 'edit')).resolves.toBeUndefined()
     expect(await history.listHistory(dir, 'a.md')).toEqual([])
+  })
+})
+
+describe('files beside notes', () => {
+  const bytes = new Uint8Array(Array.from({ length: 600 }, (_, i) => (i * 37 + 11) % 256))
+  const same = async (file: File) => new Uint8Array(await file.arrayBuffer()).every((b, i) => b === bytes[i])
+
+  it('moves, bins and restores a binary file byte for byte', async () => {
+    const dir = createMemFs()
+    await library.writeBlob(dir, 'Inbox/scan.pdf', new Blob([bytes]))
+    expect(await library.moveNote(dir, 'Inbox/scan.pdf', 'Projects/Acme')).toBe('Projects/Acme/scan.pdf')
+    expect(await same(await library.readBlob(dir, 'Projects/Acme/scan.pdf'))).toBe(true)
+
+    await library.trashNote(dir, 'Projects/Acme/scan.pdf')
+    const [item] = await library.listTrash(dir)
+    expect(item).toMatchObject({ title: 'scan.pdf', kind: 'file', originalPath: 'Projects/Acme/scan.pdf' })
+    await library.writeBlob(dir, 'Projects/Acme/scan.pdf', new Blob(['newer']))
+    expect(await library.restoreTrash(dir, item.trashName)).toBe('Projects/Acme/scan 1.pdf')
+    expect(await same(await library.readBlob(dir, 'Projects/Acme/scan 1.pdf'))).toBe(true)
+  })
+
+  it('renames a file keeping its extension unless a new one is given', async () => {
+    const dir = createMemFs()
+    await library.writeBlob(dir, 'Q3.xlsx', new Blob([bytes]))
+    await library.writeBlob(dir, 'Q3 final.xlsx', new Blob(['taken']))
+    expect(await library.renameAsset(dir, 'Q3.xlsx', 'Q3 final')).toBe('Q3 final 1.xlsx')
+    expect(await library.renameAsset(dir, 'Q3 final 1.xlsx', 'model.csv')).toBe('model.csv')
+    expect(await same(await library.readBlob(dir, 'model.csv'))).toBe(true)
+  })
+
+  it('imports dropped files as they are, beside the notes', async () => {
+    const dir = createMemFs()
+    const imported = await library.importNotes(
+      dir,
+      [
+        { path: 'Research/notes.txt', content: 'plain' },
+        { path: 'Research/chart.png', blob: new Blob([bytes]) },
+        { path: 'Research/chart.png', blob: new Blob(['again']) },
+      ],
+      'Inbox',
+    )
+    expect(imported).toEqual([
+      { id: 'Inbox/Research/notes.md', title: 'notes', renamed: false, isNote: true },
+      { id: 'Inbox/Research/chart.png', title: 'chart.png', renamed: false, isNote: false },
+      { id: 'Inbox/Research/chart 1.png', title: 'chart 1.png', renamed: true, isNote: false },
+    ])
+    expect(await same(await library.readBlob(dir, 'Inbox/Research/chart.png'))).toBe(true)
   })
 })

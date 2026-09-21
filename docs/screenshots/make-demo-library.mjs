@@ -49,7 +49,7 @@ Your notes, tasks, and bookmarks — **plain files, fully local**.
 ## Why Deckle?
 
 - Live WYSIWYG Markdown editing
-- An AI assistant that can *search and edit* your library
+- A knowledge base your agent fills — notes, PDFs, spreadsheets, images
 - A Todoist-style planner with due dates and a calendar
 - Bookmarks with collections and comments
 

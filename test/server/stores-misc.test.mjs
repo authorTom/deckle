@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { InvalidSettingsError, MAX_SETTINGS_BYTES, createSettingsStore } from '../../server/settings-store.mjs'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { resolveLegacyEnv } from '../../server/legacy-env.mjs'
 import { createLibraryApi } from '../../server/library-api.mjs'
 import { createSearch } from '../../server/search.mjs'
@@ -15,49 +14,6 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true })
-})
-
-describe('settings store', () => {
-  it('reads null before anything is saved, then what was saved', async () => {
-    const store = createSettingsStore(path.join(root, 'state'))
-    expect(await store.read()).toBeNull()
-    await store.write({ provider: 'openai', openaiKey: 'sk' })
-    expect(await store.read()).toEqual({ provider: 'openai', openaiKey: 'sk' })
-    const stat = await fs.stat(path.join(root, 'state', 'assistant.json'))
-    expect(stat.mode & 0o777).toBe(0o600)
-  })
-
-  it('refuses anything but an object', async () => {
-    const store = createSettingsStore(root)
-    for (const value of [null, undefined, [], 'text', 3]) {
-      await expect(store.write(value)).rejects.toThrow(InvalidSettingsError)
-    }
-  })
-
-  it('measures size as sent, not as indented on disk', async () => {
-    const store = createSettingsStore(root)
-    // Compact, this fits; indented, the many small keys push it over.
-    const value = {}
-    let i = 0
-    while (JSON.stringify(value).length < MAX_SETTINGS_BYTES - 64) value[`k${i++}`] = 1
-    expect(JSON.stringify(value, null, 2).length).toBeGreaterThan(MAX_SETTINGS_BYTES)
-    await expect(store.write(value)).resolves.toBeUndefined()
-
-    await expect(store.write({ big: 'x'.repeat(MAX_SETTINGS_BYTES) })).rejects.toThrow('too large')
-  })
-
-  it('treats a corrupt file as nothing saved', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    await fs.writeFile(path.join(root, 'assistant.json'), '{oops')
-    expect(await createSettingsStore(root).read()).toBeNull()
-  })
-
-  it('survives concurrent saves', async () => {
-    const store = createSettingsStore(root)
-    await Promise.all(Array.from({ length: 10 }, (_, n) => store.write({ n })))
-    expect(await store.read()).toHaveProperty('n')
-    expect((await fs.readdir(root)).filter((f) => f.endsWith('.tmp'))).toEqual([])
-  })
 })
 
 describe('legacy environment names', () => {

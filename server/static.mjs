@@ -39,14 +39,21 @@ const GZIP_MIN_BYTES = 1024
 /**
  * What the page may load and run.
  *
- * The point is `script-src 'self'`: the app keeps provider API keys in
- * localStorage and can read and write the whole library, so a script that got
- * into the page by any route — a note, a bookmark, a dependency bug — must not
- * be able to run. Everything else is as open as the app genuinely needs:
+ * The point is `script-src 'self'`: the app can read and write the whole
+ * library, so a script that got into the page by any route — a note, a file an
+ * agent saved, a bookmark, a dependency bug — must not be able to run.
+ * Everything else is as open as the app genuinely needs:
  *
- *   - connect-src allows any http(s) origin, because the browser calls the AI
- *     provider directly and LM Studio lives at whatever URL the user typed —
- *     usually http://localhost or a LAN address.
+ *   - connect-src is 'self'. The app talks to nothing but this server; it used
+ *     to allow any origin so the browser could call an AI provider, and that
+ *     assistant is gone.
+ *   - blob: for images, media, frames and objects is how a stored file is
+ *     previewed: the app reads the file through the library, wraps the bytes in
+ *     a blob URL, and shows it in an <img>, <video>, or — for a PDF — a frame
+ *     the browser's own viewer fills (Chromium's viewer is an <embed> inside
+ *     that frame, which is why object-src needs it too). Only the app's own
+ *     scripts can mint a blob URL, and it only ever mints them for images,
+ *     audio, video and PDFs, never for HTML.
  *   - style-src allows inline styles, which the editor and React set freely.
  *   - frame-ancestors replaces X-Frame-Options for browsers that know it.
  */
@@ -55,10 +62,12 @@ export const CONTENT_SECURITY_POLICY = [
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
+  "media-src 'self' blob:",
   "font-src 'self' data:",
-  "connect-src 'self' https: http:",
+  "connect-src 'self'",
   "worker-src 'self' blob:",
-  "object-src 'none'",
+  "frame-src 'self' blob:",
+  "object-src 'self' blob:",
   "base-uri 'self'",
   "form-action 'self'",
   "frame-ancestors 'none'",

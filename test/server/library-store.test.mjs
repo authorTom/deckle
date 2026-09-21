@@ -70,7 +70,7 @@ describe('notes', () => {
     const history = await store.listHistory('a.md')
     expect(history).toHaveLength(20)
     expect(await store.readSnapshot(history[0].snapName)).toBe('v22')
-    expect(history.every((h) => h.reason === 'ai')).toBe(true)
+    expect(history.every((h) => h.reason === 'agent')).toBe(true)
   })
 
   it('refuses to write over a folder', async () => {

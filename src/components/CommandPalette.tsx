@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
-import { CornerDownLeft, FileText, Search, type LucideIcon } from 'lucide-react'
-import type { NoteFile } from '../fs/library'
+import { CornerDownLeft, Search, type LucideIcon } from 'lucide-react'
+import type { LibraryFile } from '../fs/library'
 import { folderOf } from '../lib/format'
+import { iconFor } from '../lib/fileTypes'
 import { useEnterExit } from '../hooks/useEnterExit'
 import { OVERLAY_EXIT_MS } from '../lib/motion'
 
@@ -29,13 +30,14 @@ interface CommandPaletteProps {
   open: boolean
   onClose: () => void
   commands: Command[]
-  notes: NoteFile[]
+  /** Notes and files, openable by name. */
+  notes: LibraryFile[]
   onOpenNote: (id: string) => void
 }
 
 type Item =
   | { kind: 'command'; cmd: Command }
-  | { kind: 'note'; note: NoteFile }
+  | { kind: 'note'; note: LibraryFile }
 
 export default function CommandPalette({
   open,
@@ -161,7 +163,7 @@ export default function CommandPalette({
               setIndex(0)
             }}
             onKeyDown={onKeyDown}
-            placeholder="Type a command or search notes…"
+            placeholder="Type a command, or the name of a note or file…"
             aria-label="Command palette"
           />
         </div>
@@ -177,7 +179,7 @@ export default function CommandPalette({
             const Icon =
               item.kind === 'command'
                 ? item.cmd.icon ?? CornerDownLeft
-                : FileText
+                : iconFor(item.note)
             const key =
               item.kind === 'command' ? `c-${item.cmd.id}` : `n-${item.note.id}`
             const path = item.kind === 'note' ? folderOf(item.note.id) : ''
@@ -194,7 +196,7 @@ export default function CommandPalette({
                   : null
               if (section !== prevSection) header = section
             } else if (i === commandCount) {
-              header = 'Notes'
+              header = 'Notes and files'
             }
 
             return (

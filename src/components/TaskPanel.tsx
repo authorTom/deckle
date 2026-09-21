@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
+  Activity,
   Bookmark,
   CalendarDays,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  FolderKanban,
   Inbox,
   ListTodo,
   Pencil,
@@ -17,8 +19,8 @@ import {
 } from 'lucide-react'
 import BookmarkList from './BookmarkList'
 
-/** The three things the left panel can be showing. */
-export type PanelTab = 'tasks' | 'bookmarks'
+/** The things the left panel can be showing. */
+export type PanelTab = 'projects' | 'activity' | 'tasks' | 'bookmarks'
 import MiniCalendar from './MiniCalendar'
 import TaskItem from './TaskItem'
 import { timeAgo } from '../lib/format'
@@ -35,7 +37,20 @@ interface TaskPanelProps {
   tasks: TasksApi
   bookmarks: BookmarksApi
   onOpenNote: (noteId: string) => void
+  /** The Projects tab's content, built by the app, which owns the projects. */
+  projects: ReactNode
+  /** The Activity tab's content, likewise. */
+  activity: ReactNode
+  /** Agent changes since the person last looked, counted on the Activity tab. */
+  activityUnseen: number
 }
+
+const TABS: { id: PanelTab; label: string; Icon: typeof Activity }[] = [
+  { id: 'projects', label: 'Projects', Icon: FolderKanban },
+  { id: 'activity', label: 'Activity', Icon: Activity },
+  { id: 'tasks', label: 'Tasks', Icon: ListTodo },
+  { id: 'bookmarks', label: 'Bookmarks', Icon: Bookmark },
+]
 
 /** Priority first, then due date (undated last), then creation order. */
 function sortTasks(list: Task[]): Task[] {
@@ -55,6 +70,9 @@ export default function TaskPanel({
   tasks,
   bookmarks,
   onOpenNote,
+  projects,
+  activity,
+  activityUnseen,
 }: TaskPanelProps) {
   const [view, setView] = useState('inbox')
   const [selectedDate, setSelectedDate] = useState(todayStr)
@@ -381,21 +399,34 @@ export default function TaskPanel({
   return (
     <aside className="task-panel">
       <div className="task-header">
-        <div className="panel-tabs">
-          <button
-            type="button"
-            className={`panel-tab${tab === 'tasks' ? ' active' : ''}`}
-            onClick={() => onTabChange('tasks')}
-          >
-            <ListTodo size={15} /> Tasks
-          </button>
-          <button
-            type="button"
-            className={`panel-tab${tab === 'bookmarks' ? ' active' : ''}`}
-            onClick={() => onTabChange('bookmarks')}
-          >
-            <Bookmark size={15} /> Bookmarks
-          </button>
+        {/* Four tabs don't fit a narrow panel with every label showing, so an
+            inactive tab keeps its icon and gives its name as a tooltip — until
+            the panel is widened enough to hold them all (see global.css). */}
+        <div className="panel-tabs" role="tablist" aria-label="Panel">
+          {TABS.map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              className={`panel-tab${tab === id ? ' active' : ''}`}
+              onClick={() => onTabChange(id)}
+              title={label}
+              aria-label={
+                id === 'activity' && activityUnseen
+                  ? `${label}, ${activityUnseen} new`
+                  : label
+              }
+            >
+              <Icon size={15} />
+              <span className="panel-tab-label">{label}</span>
+              {id === 'activity' && activityUnseen > 0 && (
+                <span className="panel-tab-count" aria-hidden="true">
+                  {activityUnseen > 99 ? '99+' : activityUnseen}
+                </span>
+              )}
+            </button>
+          ))}
         </div>
         <button
           type="button"
@@ -407,6 +438,10 @@ export default function TaskPanel({
           <X size={18} />
         </button>
       </div>
+
+      {tab === 'projects' && projects}
+
+      {tab === 'activity' && activity}
 
       {tab === 'bookmarks' && (
         <BookmarkList bookmarks={bookmarks} onOpenNote={onOpenNote} />

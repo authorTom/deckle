@@ -1,10 +1,12 @@
 import { useRef, useState } from 'react'
-import { Columns2, FileText, X } from 'lucide-react'
-import type { NoteFile } from '../fs/library'
+import { Columns2, X } from 'lucide-react'
+import type { LibraryFile } from '../fs/library'
+import { iconFor } from '../lib/fileTypes'
 import { rectOf, type FlightOrigin } from '../lib/motion'
 
 interface NoteTabsProps {
-  notes: NoteFile[]
+  /** Open notes and files, in strip order. */
+  notes: LibraryFile[]
   activeId: string | null
   splitId: string | null
   /** `origin` is the label's rect, which the incoming note's title flies from. */
@@ -68,6 +70,7 @@ export default function NoteTabs({
       <div className="tab-strip-scroll">
         {notes.map((note, i) => {
           const active = note.id === activeId
+          const Icon = iconFor(note)
           return (
             <div
               key={note.id}
@@ -125,7 +128,7 @@ export default function NoteTabs({
                 setDropIndex(null)
               }}
             >
-              <FileText size={14} className="tab-icon" />
+              <Icon size={14} className="tab-icon" />
               <span className="tab-label">{note.title}</span>
               {isDirty(note.id) && <span className="tab-dot" aria-label="Unsaved" />}
               <span

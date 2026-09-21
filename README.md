@@ -1,28 +1,39 @@
 # Deckle
 
-**A clean, minimalist, web-based knowledge management platform.**
+**A self-hosted knowledge base for you and your agents.**
 
-Markdown notes with live WYSIWYG editing, a Todoist-style task planner,
-bookmarks with collections and comments, and an AI assistant that can search and
-edit your knowledge base — plus a keyboard-driven command palette, light and
-dark mode, and a fully responsive layout.
+Deckle is where an AI agent's work lives once the conversation is over. Point
+an agent such as [Hermes](integrations/hermes/README.md) at it over MCP and it
+searches what is already known before it starts, keeps each piece of work in a
+project, saves what it produces — notes, reports, PDFs, spreadsheets, images,
+code — and logs what it did and why. You review all of it in one place: files
+open in the app, an activity feed shows every change under the agent's name,
+and projects carry a status and a running log.
 
-Everything lives as plain Markdown files in a folder you can open, and you
-choose where: on your own computer, or — if you self-host with Docker — in a
-volume on your own server, which makes Deckle fully web based and leaves nothing
-on the device you're using. No third-party account, no lock-in.
+It is also a good place to write yourself: Markdown notes with live WYSIWYG
+editing and `[[wikilinks]]`, a Todoist-style task planner, bookmarks with
+collections and comments, a keyboard-driven command palette, light and dark
+mode, and a fully responsive layout.
+
+Everything lives as plain files in folders you can open, and you choose where:
+on your own computer, or — if you self-host with Docker — in a volume on your
+own server, which is what an agent needs to reach it. No third-party account,
+no lock-in, and no AI inside Deckle itself: the agent does the thinking, Deckle
+keeps the record.
 
 **[deckle.redacre.net](https://deckle.redacre.net/)** — the project website: what
 Deckle does, how to install it, and the questions people ask first. There is no
 hosted version to sign up for; you run it yourself.
 
-![Markdown notes with a folder tree, editor tabs, live WYSIWYG editing, and a backlinks panel](docs/screenshots/editor.png)
+![An agent's project in Deckle: its files in the tree — notes, a PDF report, a spreadsheet, a chart, a CSV — the Projects panel with status and what's new, and a findings note with its properties and an embedded chart](docs/screenshots/projects.png)
 
-| Task planner — Inbox, Today, Upcoming with a mini calendar | Bookmarks — collections and per-bookmark comments |
+| Files an agent saved — here a spreadsheet, with who saved it and what links to it | Activity — every change an agent made, by name (dark mode) |
 | --- | --- |
-| ![Todoist-style task planner with due dates, priorities, and a month calendar](docs/screenshots/tasks.png) | ![Bookmarks with coloured collections and a comment box](docs/screenshots/bookmarks.png) |
-| **AI assistant — search and edit your library (dark mode)** | **Command palette — everything a keystroke away** |
-| ![AI assistant panel in dark mode](docs/screenshots/assistant.png) | ![Command palette in dark mode, listing commands from new note to split editor and themes](docs/screenshots/palette.png) |
+| ![A spreadsheet open in Deckle, with its sheets, the agent that saved it, and the notes that link to it](docs/screenshots/files.png) | ![The Activity feed in dark mode beside a PDF report the agent saved](docs/screenshots/activity.png) |
+| **Writing — live Markdown, tabs, wikilinks and backlinks** | **Task planner — Inbox, Today, Upcoming with a mini calendar** |
+| ![Markdown notes with a folder tree, editor tabs, live WYSIWYG editing, and a backlinks panel](docs/screenshots/editor.png) | ![Todoist-style task planner with due dates, priorities, and a month calendar](docs/screenshots/tasks.png) |
+| **Bookmarks — collections and per-bookmark comments** | **Command palette — everything a keystroke away** |
+| ![Bookmarks with coloured collections and a comment box](docs/screenshots/bookmarks.png) | ![Command palette in dark mode, listing commands from new note to projects and agent activity](docs/screenshots/palette.png) |
 
 ## Why it exists
 
@@ -31,43 +42,88 @@ polished but keep your notes in their database, on their terms, for as long as
 they stay in business. The local ones keep your files but tie you to one
 machine, or to a sync service you also have to trust.
 
-Deckle keeps the files as ordinary `.md` on disk — openable in any editor,
-syncable, backed up by whatever you already use — while running entirely in the
-browser. Self-host it and the same library is reachable from a laptop, a phone or
-Safari with nothing stored on the device.
+Deckle keeps the files as ordinary files on disk — `.md` notes beside whatever
+else you keep, openable in any editor, syncable, backed up by whatever you
+already use — while running entirely in the browser. Self-host it and the same
+library is reachable from a laptop, a phone or Safari with nothing stored on
+the device.
 
-The AI assistant follows the same principle: it can read and rewrite your whole
-library, but every change to a note is shown as a diff you approve first, and
-your API keys go nowhere except the provider — held in your browser, or, if you
-self-host behind a password, on your own server so your other devices are
-already set up. The one thing it writes on its own is its memory of how you
-work, which is Markdown you can read and delete.
+Agents make the same problem worse. An agent that researches, writes and builds
+things for you produces a stream of output — reports, datasets, drafts, charts —
+that ends up scattered across its working directory and lost with the
+conversation. Deckle gives that work a home you own: plain files in a folder,
+organised into projects, searchable by the agent next time it needs them, and
+reviewable by you, with a record of who changed what. Every change an agent
+makes is as recoverable as your own.
 
 ## What it does
 
+**For your agent's work**
+
+- **An MCP server** at `/api/v1/mcp`, so an agent such as Hermes can use
+  Deckle directly: `search`, `read`, `list`, `list_projects`,
+  `recent_activity`, `write_note`, `save_file`, `create_project`,
+  `update_project`, `log_progress`, `move` and `delete`. It uses the same tokens
+  as the REST API, and a read-only token is offered the read tools only. See
+  [Connecting Hermes](integrations/hermes/README.md).
+- **Files, not just notes** — PDFs, spreadsheets, Word and PowerPoint
+  documents, images, audio, video, CSV, JSON and code sit in the tree beside the
+  notes and open in a tab. Images, PDFs, audio and video show in the browser's
+  own viewers; Word documents, every sheet of a workbook, slides, CSV tables,
+  JSON and text are rendered in the app; anything else is a download away.
+  Files move, rename, delete and restore exactly as notes do.
+- **Projects** — every folder in `Projects/` is a project, with a status,
+  summary and tags in its `Overview.md` and a dated `Log.md` the agent keeps as
+  it works. The Projects view lists them by what changed last, filters by
+  status, and changes a status in place.
+- **Activity** — every change made through the API or MCP is recorded under the
+  name of the token that made it, with whatever the agent said about it. The
+  Activity feed groups it by day, the top bar counts what's new since you last
+  looked, and a file's viewer says who saved it and why. The log itself is
+  `.deckle/activity.jsonl` in your library.
+- **Live** — on a server library, an agent's changes appear in an open app
+  within about fifteen seconds, without a refresh.
+- **Search inside documents** — the API and MCP search rank notes and files
+  together, reading the text inside Word, Excel, PowerPoint, OpenDocument, CSV,
+  JSON, text and code files. PDFs and images are found by name, and by the notes
+  that link to them.
+- **Front matter** — YAML at the top of a note (the way agents and Obsidian
+  describe notes) is shown as a properties strip above the text, editable as
+  YAML, and never damaged by the editor.
+- **A push script** — [`deckle_push.py`](integrations/hermes/skills/deckle/scripts/deckle_push.py)
+  sends large files and whole folders, never sending hidden files, `.env` files,
+  private keys or dependency caches.
+
+**For writing and reading**
+
 - **Live WYSIWYG markdown** — type markdown (`# `, `**bold**`, `- list`) and it
-  renders inline as you go (powered by TipTap / ProseMirror).
+  renders inline as you go (powered by TipTap / ProseMirror). Images show in
+  place, from the library or the web.
 - **Local folder library** — pick a folder and Deckle reads and writes your notes
-  there as real `.md` files. Open the same folder in another editor, sync it, or
-  back it up — it's just Markdown on disk. (Chromium browsers; Safari and Firefox use
+  there as real files. Open the same folder in another editor, sync it, or
+  back it up — it's just files on disk. (Chromium browsers; Safari and Firefox use
   private in-browser storage — see
   [Where your notes are stored](#where-your-notes-are-stored).)
 - **Or a server library** — self-host with Docker and your notes can live in a
   volume on your own server instead, password protected, reachable from any
-  browser or device with nothing stored locally.
+  browser or device with nothing stored locally. This is the one an agent can
+  reach.
 - **Folder tree** — browse nested subfolders, create folders, and
-  **drag-and-drop** notes between them: drop onto a folder, onto any note
-  already inside one, or hold over a shut folder and it springs open so you can
-  carry a note further down in one go.
+  **drag-and-drop** notes and files between them: drop onto a folder, onto any
+  note already inside one, or hold over a shut folder and it springs open so you
+  can carry a note further down in one go.
 - **Move to another folder…** — when dragging isn't practical (a long tree, a
-  collapsed destination, a phone), move a note by naming its destination
-  instead: from the note's row in the tree, from a search result, from the
-  editor menu, or from the command palette. Pick a folder from the whole
-  library, or type a name — including a nested one like `Archive/2026` — and it
-  is created on the way.
+  collapsed destination, a phone), move a note or file by naming its destination
+  instead: from its row in the tree, from a search result, from the editor
+  menu, or from the command palette. Pick a folder from the whole library, or
+  type a name — including a nested one like `Archive/2026` — and it is created
+  on the way.
+- **Wikilinks and backlinks** — `[[Note]]` or `[[report.pdf]]` link to notes
+  and files alike, and every note and file shows what links to it.
 - **Command palette** — `Ctrl`/`Cmd`+`K` opens a fast, fully keyboard-driven
-  palette for commands, formatting, and jumping to any note.
-- **Search across the library** — find notes by title, path, or file contents.
+  palette for commands, formatting, and jumping to any note or file.
+- **Search across the library** — find notes by title, path, or contents, and
+  files by name.
 - **Tasks and planner** — a Todoist-style panel docked on the left: Inbox,
   Today, Upcoming (agenda and mini month calendar), projects, priorities
   (P1–P4), recurring tasks, a completed log, and a bin for deleted tasks
@@ -79,53 +135,13 @@ work, which is Markdown you can read and delete.
   with its own comment box. Paste a link to add it, or select a link in a note
   and use the bookmark button — captured bookmarks link back to their source
   note. Stored in `.deckle/bookmarks.json` in the library.
-- **Version history** — restore points are saved automatically: before every AI
-  edit, periodically while you type, and before every restore. Open the clock
-  icon to preview, restore or delete a note's earlier versions (kept in a hidden
-  `.history` folder, 20 per note).
-- **Recycle bin** — deleted notes move to a hidden `.trash` folder and can be
-  restored or permanently removed.
-- **AI assistant** — an optional right-side chat panel that can search and read
-  your whole library and create, edit, move or delete notes and folders. Every
-  change to a note is shown as a diff and must be approved before it runs. Ask questions
-  about your notes and it finds and cites the relevant ones. Works with an
-  Anthropic, OpenAI or [OpenRouter](https://openrouter.ai) API key, or fully
-  locally via [LM Studio](https://lmstudio.ai). Reasoning models show a
-  collapsible "Thought process". The model it is using is named above the
-  conversation and switches from there — provider included, so moving between a
-  local model and Claude is one click, not a trip to a settings screen. Your API
-  key stays in your browser — or, on a password-protected server library, on the
-  server, so every device you sign in from is configured already.
-- **Send it, or queue it** — the assistant's composer has two buttons. *Send*
-  answers in the conversation; *Queue* hands the same words to the background
-  and gives you the box back. The panel has a **Queue** tab beside Chat holding
-  everything in flight — what needs you, what is working, what is waiting its
-  turn — and one line above the composer keeps you posted while you chat. Jobs run one at a time or several at once, and their
-  output lands in an **Assistant inbox** folder. Each is pinned to the model you
-  queued it against — send the long one to Opus and the tidy-up to Haiku, and
-  see which ran what. That folder is the safety boundary — inside it the
-  assistant writes freely; anything outside stops the run and asks you to
-  approve the exact change, and deletions always ask. A run that needs a
-  decision can ask you a question and wait: only those are badged, on the
-  assistant button itself, so a parked run is visible with the panel closed.
-  Finished runs list what they wrote, and any run can be resumed or re-run.
-  Runs live in `.deckle/runs/` inside the library.
-- **Assistant memory** — the assistant keeps what it learns about how you work
-  as ordinary Markdown in a hidden `.deckle/memory/` folder: one file per fact,
-  with a one-line index. Only that index is sent with every message; the rest is
-  fetched when it is relevant to what you asked, inside a token budget, and
-  recording something it already knows updates that memory rather than adding a
-  near-duplicate. Read, edit, pin or delete any of it from *Assistant memory* in
-  the command palette — or open the files in any editor. Off with one tick box.
-- **Semantic library search (optional)** — enable embeddings in the assistant
-  settings (OpenAI or a local LM Studio embedding model) and library search
-  matches by meaning, not just keywords. Vectors are cached locally and only
-  changed notes are re-embedded; keyword (BM25) search always works without it.
-- **Inline Ask AI** — highlight text and click the brain icon to improve, fix,
-  shorten, summarise, explain, or run a custom prompt on just that passage, then
-  Replace / Insert / Copy the result.
-- **Quick formatting** — toolbar and floating selection menu for bold, italic,
-  strikethrough, inline code, headings (H1–H3), lists and quotes.
+- **Version history** — restore points are saved automatically: periodically
+  while you type, before an agent rewrites a note, and before every restore.
+  Open the clock icon to preview, restore or delete a note's earlier versions
+  (kept in a hidden `.history` folder, 20 per note).
+- **Recycle bin** — deleted notes and files move to a hidden `.trash` folder and
+  can be restored or permanently removed. A file an agent replaces lands there
+  too, marked as replaced.
 - **Focus mode** — hide all chrome for distraction-free writing
   (`Ctrl`/`Cmd`+`Shift`+`F`, or `Esc` to exit).
 - **About** — *About Deckle* in the editor menu or the command palette names the
@@ -133,26 +149,27 @@ work, which is Markdown you can read and delete.
   backends is holding it.
 - **Light and dark mode** — defaults to your system preference; choice persists.
 - **Responsive** — desktop, tablet and mobile (collapsible note drawer).
-- **Import** — drop `.md` files, or a whole folder of them, anywhere on the note
-  tree; nested folders keep their structure and nothing is ever overwritten.
-  Importing from the picker asks where the notes should go first — any folder in
-  the library, or a new one you name — and tells you how many it found before
-  writing anything.
+- **Import** — drop files, or a whole folder of them, anywhere on the tree;
+  Markdown becomes notes, everything else is stored as it is, nested folders
+  keep their structure and nothing is ever overwritten. Hidden files and
+  dependency caches such as `node_modules` stay behind. Importing from the
+  picker asks where things should go first — any folder in the library, or a
+  new one you name — and tells you how many files it found before writing
+  anything.
 - **Export** — download a note as `.md`, export it to PDF via a clean print
-  layout, or take the whole knowledge base as a ZIP: every note in its folder
-  structure plus your tasks, bookmarks and the assistant's memory, optionally
+  layout, or take the whole knowledge base as a ZIP: every note and file in its
+  folder structure plus your tasks, bookmarks and the activity log, optionally
   with the recycle bin and version history for a full backup.
 - **REST API (optional)** — a token-authenticated API at `/api/v1` so an agent
   or script can search, read, write and organise your knowledge base, described
-  by an OpenAPI 3.1 document the server publishes itself. See
-  [API](#api).
+  by an OpenAPI 3.1 document the server publishes itself. See [API](#api).
 
 ## Where your notes are stored
 
 Deckle has three storage backends behind the same library interface. Whichever you
-use, your notes are ordinary `.md` files in an identical folder layout — so a
-library copied from a disk folder into the server's volume (or the other way
-round) just works. Only the in-browser library is awkward to copy, since it lives
+use, your notes are ordinary `.md` files, beside your other files, in an
+identical folder layout — so a library copied from a disk folder into the
+server's volume (or the other way round) just works. Only the in-browser library is awkward to copy, since it lives
 in browser-managed storage rather than a folder you can open.
 
 - **A folder on your computer** — **Chromium desktop browsers** (Chrome, Edge,
@@ -168,6 +185,8 @@ in browser-managed storage rather than a folder you can open.
 - **On your own server** — when you self-host with Docker, notes are stored in a
   volume on the machine running Deckle. The app then works from any browser,
   including Safari and mobile, and nothing is kept on the device you're using.
+  It is also the only one an agent can reach: the API and MCP server serve the
+  server library.
 
 When a server library is available, Deckle asks which you want on first load; you can
 switch later from the command palette (`Ctrl`/`Cmd`+`K`). Nothing is copied
@@ -200,6 +219,23 @@ curl -O https://raw.githubusercontent.com/authorTom/deckle/main/.env.example
 mv .env.example .env          # then edit DECKLE_PORT / DECKLE_IMAGE / DECKLE_PASSWORD
 ```
 
+**To let an agent in**, give it a token of its own in the same `.env` — and set
+a password, because the agent's token is not the only way into an open port:
+
+```bash
+DECKLE_PASSWORD=a-long-passphrase-for-you
+DECKLE_API_TOKENS=hermes:rw:PASTE-A-SECRET-HERE   # openssl rand -base64 32
+```
+
+```bash
+docker compose up -d
+```
+
+The agent then connects to `http://localhost:8080/api/v1/mcp` (or your
+server's address) with that secret as a bearer token — see
+[Connecting an agent](#connecting-an-agent), and
+[Connecting Hermes](integrations/hermes/README.md) for Hermes step by step.
+
 Updating:
 
 ```bash
@@ -212,13 +248,17 @@ you, set `DECKLE_IMAGE` in `.env` to whichever tag matches your appetite:
 | Tag | What you get |
 | --- | --- |
 | `:latest` | The newest release. The default |
-| `:1` | Newest `1.x` — fixes and new features, never a breaking change |
-| `:1.4` | Newest `1.4.x` — fixes only |
-| `:1.4.2` | Exactly that release. Never moves, so a rollback is a one-line edit |
+| `:3` | Newest `3.x` — fixes and new features, never a breaking change |
+| `:3.0` | Newest `3.0.x` — fixes only |
+| `:3.0.0` | Exactly that release. Never moves, so a rollback is a one-line edit |
 | `:edge` | The tip of `main`, unreleased. For trying things, not for deployments |
 
 Every release is described in the [changelog](CHANGELOG.md), and what those
 numbers promise is spelled out under [Versioning](#versioning).
+
+**On `:latest`, the next pull takes you from 2.x to 3.0**, which removes the AI
+assistant — read [Upgrading from 2.x](#upgrading-from-2x) first. To stay on 2.x
+for now, set `DECKLE_IMAGE=ghcr.io/authortom/deckle:2`.
 
 **Running the image directly**, without compose. Note that the image itself
 ships with the server library **off**, so this is a static file server with notes
@@ -252,10 +292,6 @@ use as your library — Deckle remembers it for next time (you may be asked to r
 access on return). In Safari or Firefox, click **Get started** to create the
 private in-browser library.
 
-To use the AI assistant, open the panel (sparkles icon) → settings (gear) and
-pick a provider: Anthropic (Claude), OpenAI, OpenRouter, or a local LM Studio
-server. Keys are kept in `localStorage` and sent only to the provider you chose.
-
 There is also a containerised dev server, if you would rather not install Node:
 
 ```bash
@@ -272,8 +308,8 @@ DECKLE_SERVER_LIBRARY=true DECKLE_LIBRARY_DIR=./library node server/index.mjs &
 npm run dev                           # → http://localhost:5173
 ```
 
-To run the tests — the server through its real HTTP handler, the API, every
-storage path, the assistant's tools and autosave:
+To run the tests — the server through its real HTTP handler, the API and MCP
+server, every storage path, file previews and autosave:
 
 ```bash
 npm test                              # once, as CI runs it
@@ -293,53 +329,39 @@ Only relevant when the server library is enabled.
 | `DECKLE_SESSION_TTL_DAYS` | `30` | How long a sign-in lasts |
 | `DECKLE_TRUST_PROXY` | *(none)* | `true` behind a reverse proxy (a number for a chain of them), so sign-in throttling sees real client addresses |
 | `DECKLE_LIBRARY_DIR` | `/data` | Where the notes live inside the container |
-| `DECKLE_STATE_DIR` | `<library>/.deckle-state` | Deckle's own state — the shared assistant settings. Never served as part of the library |
-| `DECKLE_API_TOKENS` | *(none)* | Bearer tokens for the [API](#api). Blank leaves it switched off |
+| `DECKLE_STATE_DIR` | `<library>/.deckle-state` | A folder Deckle keeps to itself, never served. Empty in 3.x — see [Upgrading from 2.x](#upgrading-from-2x) |
+| `DECKLE_API_TOKENS` | *(none)* | Bearer tokens for the [API and MCP server](#api). Blank leaves both switched off |
 | `DECKLE_API_CORS_ORIGINS` | *(none)* | Origins allowed to call `/api/v1` from a browser |
+| `DECKLE_MAX_FILE_MB` | `100` | The largest single file the library accepts |
+| `DECKLE_PROJECTS_DIR` | `Projects` | The folder projects live in |
+| `TZ` | *(UTC)* | Time zone for the activity feed and project logs, e.g. `Europe/London` |
 | `DECKLE_PORT` | `8080` | Host port (compose only) |
 
-Everything else — theme, AI provider, embeddings — is set in the app itself. On
-a server library with a password, the assistant's settings (including the API
-key) are kept by the server rather than by one browser, so signing in from a new
-device finds the assistant already configured. See
-[Assistant settings across devices](#assistant-settings-across-devices).
+Everything else — theme, palette — is set in the app itself.
 
-### Assistant settings across devices
+### Upgrading from 2.x
 
-The assistant's settings — provider, model, custom instructions and the API key
-— normally live in the browser you typed them into. That is the right home for a
-library on your own disk, but not for a server library, which exists precisely
-so the same notes are reachable from a laptop, a phone and a borrowed machine.
+Deckle 3 removes the AI assistant. Nothing in your library changes: the notes
+the assistant wrote are ordinary notes, and its own folders — `.deckle/memory/`
+and `.deckle/runs/` — stay where they are until you delete them.
 
-So a **password-protected** server library keeps one copy of them for everyone
-who signs in:
+**If you used a password-protected server library, your AI provider's API key
+is still on the volume**, in `.deckle-state/assistant.json`. Deckle goes on
+refusing to serve that folder, but no longer reads it. Delete the file, and
+revoke the key with the provider if you have no other use for it:
 
-- Sign in on a new device and the assistant is already configured. Nothing to
-  turn on.
-- The first device to save seeds the server with what it already has, so
-  switching to a server library never loses a key you had entered.
-- Everything travels except the **LM Studio URL** — that usually points at
-  `localhost`, which is a different machine's localhost on every device.
-- Signing out of the server library forgets the settings it lent that browser.
-
-They are stored in `DECKLE_STATE_DIR` (by default `.deckle-state` inside the
-library directory, mode `0600`), which is *not* part of the library: the file
-API refuses to read it, it never appears in a tree, a listing, or an export, and
-the assistant's own tools cannot reach it. Only a request holding a valid
-session cookie can read it back.
-
-**Without `DECKLE_PASSWORD` the server declines to hold a key at all**, and says
-so in the settings panel. An open server would hand it to anyone who could reach
-the port, and that is the user's decision to make deliberately, not a default to
-inherit.
+```bash
+docker compose exec deckle rm /data/.deckle-state/assistant.json
+```
 
 ### Upgrading from before the rename
 
 This app was called Nib, and its configuration was named `NIB_*` — `NIB_PASSWORD`,
 `NIB_SERVER_VAULT`, and so on. Those names are still read, so pulling a new image
 over an existing `.env` keeps working, and the server logs which deprecated names
-it honoured at startup. Rename them at your convenience — they are read for the
-whole of 1.x and removed no earlier than 2.0.0.
+it honoured at startup. Rename them at your convenience — they are still read in
+3.x, and dropping them will be a major release of its own, announced in the
+changelog.
 
 Two things deliberately keep their old names, because changing them would move
 data rather than rename it:
@@ -391,11 +413,31 @@ force a major — each says only what it is about.
 Every release is in the [changelog](CHANGELOG.md), and on
 [Releases](https://github.com/authorTom/deckle/releases).
 
+## Connecting an agent
+
+An agent reaches Deckle two ways, with the same tokens:
+
+- **MCP**, at `/api/v1/mcp` — the way to connect an agent framework such as
+  Hermes, Claude Code or anything else that speaks the Model Context Protocol.
+  Streamable HTTP, stateless, bearer-token authenticated. Its tools are listed
+  under [What it does](#what-it-does).
+- **REST**, at `/api/v1` — for scripts, and for agents that generate tools from
+  an OpenAPI document. See [API](#api).
+
+[**Connecting Hermes**](integrations/hermes/README.md) walks through the whole
+setup: a token, the `mcp_servers` entry in Hermes's `config.yaml`, the Deckle
+skill that teaches Hermes how to organise its work, and the push script for
+large files and folders. For any other MCP client the entry is the same shape:
+the URL `https://your-deckle/api/v1/mcp` and a header
+`Authorization: Bearer <token>`.
+
 ## API
 
 Deckle can expose the whole knowledge base over HTTP at `/api/v1`, so an agent can
-search your notes, answer from them, write new ones, and file tasks and
-bookmarks — everything the app can do, without a browser.
+search your notes and documents, answer from them, write new notes, store files
+of any type, and file tasks and bookmarks — everything the app can do, without
+a browser. Every write is recorded in the activity log under the name of the
+token that made it.
 
 It is off until you configure a token, and it needs the **server library**: a
 local folder or in-browser library lives on your device, where nothing outside
@@ -443,6 +485,10 @@ curl -H "Authorization: Bearer $TOKEN" \
 curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -X POST http://localhost:8080/api/v1/notes \
   -d '{"title":"Latency review","folder":"Projects","content":"# Latency review\n\n…"}'
+
+# 4. Store a file, saying what it is
+curl -H "Authorization: Bearer $TOKEN" -T report.pdf \
+  "http://localhost:8080/api/v1/files/Projects/Acme/report.pdf?message=final%20report"
 ```
 
 ### Endpoints
@@ -457,15 +503,21 @@ curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
 | `PUT` | `/notes/{path}` | Create or replace a note |
 | `PATCH` | `/notes/{path}` | `append` / `prepend` / `content`, or rename and move |
 | `DELETE` | `/notes/{path}` | To the recycle bin (`?permanent=true` to erase) |
-| `GET` | `/search` | BM25-ranked search with snippets (`q`, `limit`, `folder`) |
-| `GET` | `/folders` | The folder and note tree |
+| `GET` | `/search` | BM25-ranked search over notes and documents, with snippets (`q`, `limit`, `folder`, `kind`) |
+| `GET` | `/files` | List notes and files, newest first (`folder`, `kind`, `recursive`, `limit`, `offset`) |
+| `GET` | `/files/{path}` | Download any file (`?meta=true` for its details) |
+| `PUT` | `/files/{path}` | Store any file from the raw body; a replaced file goes to the bin (`overwrite`, `message`) |
+| `DELETE` | `/files/{path}` | To the recycle bin (`?permanent=true` to erase) |
+| `GET` | `/activity` | What agents changed, newest first (`since`, `project`, `actor`, `path`, `limit`) |
+| `POST` | `/mcp` | The MCP server — see [Connecting an agent](#connecting-an-agent) |
+| `GET` | `/folders` | The folder tree, with its notes and files |
 | `POST` | `/folders` | Create a folder, including missing parents |
-| `DELETE` | `/folders/{path}` | Delete a folder; its notes go to the recycle bin |
+| `DELETE` | `/folders/{path}` | Delete a folder; everything in it goes to the recycle bin |
 | `POST` | `/import` | Create up to 1000 notes in one call |
 | `GET` | `/export` | The whole library as a ZIP (`?include_hidden=true` for a full backup) |
 | `GET` `POST` | `/tasks` | List (`filter=inbox\|today\|upcoming\|overdue\|completed`) or add |
 | `GET` `PATCH` `DELETE` | `/tasks/{id}` | Read, edit, complete or bin a task |
-| `GET` `POST` | `/projects` | Task projects |
+| `GET` `POST` | `/projects` | Task-planner projects (for knowledge-base projects, see MCP or `/folders`) |
 | `GET` `POST` | `/bookmarks` | List and save bookmarks |
 | `GET` `PATCH` `DELETE` | `/bookmarks/{id}` | Read, edit or delete a bookmark |
 | `GET` `POST` | `/collections` | Bookmark collections |
@@ -473,22 +525,24 @@ curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
 | `GET` | `/history/{snapshot}` | Read a snapshot's content |
 | `POST` | `/history/{snapshot}/restore` | Restore a snapshot over its note |
 | `GET` | `/trash` | What is in the recycle bin |
-| `POST` | `/trash/{trashName}/restore` | Restore a deleted note |
+| `POST` | `/trash/{trashName}/restore` | Restore a deleted note or file |
 | `DELETE` | `/trash/{trashName}` | Erase one recycle-bin item |
 
-Paths are library-relative with `/` separators — `Projects/idea.md` — and the
-`.md` is added if you leave it off. Hidden dot folders are reserved by Deckle and
-rejected; `.trash`, `.history` and `.deckle` have their own endpoints instead.
+Paths are library-relative with `/` separators — `Projects/idea.md` — and for
+`/notes` the `.md` is added if you leave it off. Hidden dot folders are reserved
+by Deckle and rejected; `.trash`, `.history` and `.deckle` have their own
+endpoints instead. In `/folders` trees, notes are `kind: "file"` and every other
+file is `kind: "asset"`.
 Errors are always `{ "error": { "code": …, "message": … } }` with a matching
 HTTP status.
 
 ## How it's built
 
 React · TypeScript · Vite · TipTap + tiptap-markdown (editor) · lucide-react
-(icons) · @anthropic-ai/sdk (Claude; OpenAI-compatible providers via `fetch`).
+(icons). No AI SDK: Deckle calls no model.
 
 The library — a folder on disk, OPFS, or the server — is the source of truth for
-notes; IndexedDB only remembers your chosen folder and caches search embeddings.
+notes and files; IndexedDB only remembers your chosen folder.
 All three backends sit behind the browser's `FileSystemDirectoryHandle`
 interface, so the rest of the app doesn't know or care which one is in use: the
 server library is an adapter ([`src/fs/remote.ts`](src/fs/remote.ts)) that
@@ -502,15 +556,22 @@ beyond Node itself.
 server/                  # Container runtime (Node built-ins only, no deps)
   index.mjs              # Entry point: boot, listen, graceful shutdown
   app.mjs                # The HTTP app: configuration, routing, error handling
-  library-api.mjs        # Server library file API (tree/read/write/mkdir/delete)
+  library-api.mjs        # Server library file API (tree/read/write/move/delete)
   library-store.mjs      # Library semantics server-side: trash, history, tasks…
   auth.mjs               # Optional password gate + signed session cookies
   api.mjs                # /api/v1 REST API for agents and scripts
+  mcp.mjs                # /api/v1/mcp — the MCP server, over the same library
+  activity.mjs           # The activity log (.deckle/activity.jsonl)
+  projects.mjs           # Projects: Projects/<name>/Overview.md and Log.md
+  extract.mjs            # Text out of Word, Excel, PowerPoint, CSV… for search
+  unzip.mjs              # Just enough ZIP reading for office documents
+  frontmatter.mjs        # YAML front matter, read and edited line by line
+  mime.mjs               # Content types for file downloads
   api-auth.mjs           # Bearer tokens for the API, with read-only scopes
   throttle.mjs           # Failed-attempt throttling, and trusted-proxy client addresses
   dates.mjs              # Recurring-task dates, mirroring src/tasks/dates.ts
   openapi.mjs            # The API's self-served OpenAPI 3.1 description
-  search.mjs             # BM25 ranking behind GET /api/v1/search
+  search.mjs             # BM25 ranking over notes and documents
   zip.mjs                # Streaming ZIP writer behind GET /api/v1/export
   paths.mjs              # Library path validation (traversal + symlink escapes)
   legacy-env.mjs         # Honours the pre-rename NIB_* configuration names
@@ -521,20 +582,22 @@ src/
   fs/                    # Library backends: disk, OPFS, remote; version history
   fs/appData.ts          # The hidden .deckle folder, and reading its old name
   db/notes.ts            # IndexedDB store for the chosen folder handle
-  ai/                    # Chat loop, providers, library tools, retrieval, settings
+  activity/              # Reading and polling the activity log
+  projects/              # Projects, from the app's side
   tasks/                 # Task state and persistence (.deckle/tasks.json)
   bookmarks/             # Bookmark state and persistence (.deckle/bookmarks.json)
   hooks/                 # Theme, notes tree, autosave, move, search, history
-  components/            # Sidebar, editor, palette, assistant, panels, modals
-  memory/                # Assistant memory (.deckle/memory/*.md)
-  queue/                 # Background run queue (.deckle/runs/), executed in the browser
-  lib/                   # Markdown, PDF and ZIP export; Markdown import; BM25
+  components/            # Sidebar, editor, file viewer, palette, panels, modals
+  editor/                # TipTap extensions: wikilinks, tables, library images
+  lib/                   # Export and import; ZIP; office previews; front matter
   styles/                # theme / global / editor / print CSS
 
+integrations/hermes/     # Connecting Hermes: setup, a skill, and deckle_push.py
+
 test/                    # npm test (Vitest)
-  server/                # The server through its real HTTP handler: auth, API, storage
-  client/                # Library, storage, queue, assistant tools, hooks and autosave
-  helpers/               # An in-memory File System Access API, and a test server
+  server/                # The server through its real HTTP handler: auth, API, MCP, storage
+  client/                # Library, storage, previews, hooks and autosave
+  helpers/               # An in-memory File System Access API, a test server, office files
 ```
 
 ## Security
@@ -561,39 +624,41 @@ Relevant when you enable the server library.
   otherwise dodge the throttle by naming a new address on every guess. With it,
   only the entries your proxy appended are believed.
 - **The page runs only its own scripts.** Every response carries a
-  Content-Security-Policy with `script-src 'self'`, so script that reaches the
-  page by any route — a note, a bookmark, a dependency bug — cannot run. It
-  still allows the browser to call any AI provider, including an LM Studio on
-  your network.
-- **AI keys.** The server never proxies AI requests — your browser always calls
-  the provider itself. Where the key is *kept* depends on the deployment: with a
-  password set, the server holds one copy for every device that signs in, stored
-  outside the library (`DECKLE_STATE_DIR`, mode `0600`) and served only to a
-  request carrying a valid session. The library API refuses to read it, so it
-  cannot leave in an export, through `/api/v1`, or via the assistant's own
-  file-reading tools. With no password set the server declines to hold a key at
-  all, and each browser keeps its own.
+  Content-Security-Policy with `script-src 'self'` and `connect-src 'self'`, so
+  script that reaches the page by any route — a note, a file an agent saved, a
+  bookmark, a dependency bug — cannot run, and the page talks to nothing but
+  this server.
+- **Stored files are shown, never run.** The app previews images, PDFs, audio
+  and video from blob URLs it creates itself, typed by extension and never
+  sniffed; everything else — an HTML page an agent saved included — is shown as
+  text or offered as a download. `/api/v1/files` serves every file as an
+  attachment with `nosniff` and a `sandbox` policy.
 - **API tokens are passwords.** A read-write token can read, rewrite and delete
-  every note. Give each consumer its own so one can be revoked alone, and start
+  every note and file, over REST or MCP. Give each consumer its own so one can
+  be revoked alone — its name is how the Activity feed identifies it — and start
   anything new on a read-only (`r`) token until its behaviour looks sane.
   Rotating means editing `DECKLE_API_TOKENS` and restarting; there is no token
   store to clean up. Failed attempts are throttled (20 per 15 minutes).
+- **MCP refuses browser pages it wasn't told about.** A request to
+  `/api/v1/mcp` carrying an `Origin` header is refused unless
+  `DECKLE_API_CORS_ORIGINS` names it, as the MCP specification asks.
+- **Keep secrets out of the library.** Anything in it can be read by whoever
+  holds a token, and travels in exports and backups. The Hermes skill tells the
+  agent never to store credentials, and the push script refuses `.env` files,
+  private keys and credential files, but nothing inspects what an agent writes
+  through `save_file`.
 - **The API and the app share a library, not a login.** `/api/v1` ignores the
   session cookie and accepts only `Authorization: Bearer`. A browser never
   attaches that header on its own, so there is no CSRF surface and a stolen
   session cookie cannot reach the API.
-- **Agent edits are as recoverable as yours.** Deleting through the API moves
-  the note to the same recycle bin, and overwriting snapshots the replaced
-  version into the same history — so a bad agent run is undone from the app's
-  own dialogs rather than from a backup.
-- **Queued runs are fenced into one folder.** A background run may write freely
-  only inside the Assistant inbox; anything outside it stops and waits for you
-  to approve the exact change, and deletions stop wherever they are. Everything
-  it does is still snapshotted to `.history` and recoverable from `.trash`.
-- **The assistant writes without asking in exactly one place.** Its own memory,
-  under `.deckle/memory/`, which touches no note. Everything that changes a note
-  still goes through the diff. The memory is plain Markdown you can read, edit
-  and delete — from *Assistant memory* in the command palette, or in any editor.
+- **Agent edits are as recoverable as yours.** Deleting through the API or MCP
+  moves the note or file to the same recycle bin; overwriting a note snapshots
+  the replaced version into the same history; replacing any other file moves the
+  old copy to the bin — so a bad agent run is undone from the app's own dialogs
+  rather than from a backup. Every such change is in the Activity feed, named.
+- **There are no per-folder permissions.** A read-write token reaches the whole
+  library, including notes you wrote yourself. If an agent should only ever
+  write in one place, give it a library of its own.
 
 > **HTTPS matters in production.** The File System Access API and OPFS require a
 > secure context — `http://localhost` is fine for local use, but anything served
@@ -623,7 +688,7 @@ docker run --rm -v nib-vault:/data -v "$PWD:/out" \
   alpine tar czf /out/deckle-backup.tar.gz -C /data .
 ```
 
-That includes the hidden `.deckle` (tasks, bookmarks, assistant memory),
+That includes the hidden `.deckle` (tasks, bookmarks, the activity log),
 `.history` and `.trash`
 folders, so it is a complete library. Or mount a host directory instead of the
 named volume (`./notes:/data`, which must be writable by uid 1000) and point

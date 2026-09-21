@@ -1,13 +1,17 @@
-// BM25 ranking for GET /api/v1/search.
+// BM25 ranking for GET /api/v1/search and MCP's `search` tool.
 //
-// The browser assistant has a richer retrieval layer (src/ai/retrieval.ts) that
-// can fuse in embeddings, but embeddings need an API key and the key lives in
-// the user's browser, never on the server. So the API offers the lexical half:
-// BM25 over note titles, paths, and content — no key, no network, no config.
+// Lexical search over everything in the library: notes by title, path and
+// content, and files by name and path — plus their contents where there is
+// text to be had (plain-text formats and office documents; see extract.mjs).
+// No key, no network, no config.
 //
 // The index is rebuilt whenever the library's contents change, detected by a
-// cheap signature over every note's path and mtime, so repeated searches
-// against an unchanged library cost nothing but the scoring pass.
+// cheap signature over every entry's path, mtime and size, so repeated
+// searches against an unchanged library cost nothing but the scoring pass.
+// Extracted document text is cached per file version, so a rebuild after one
+// new note doesn't re-read every spreadsheet in the library.
+
+import { extractText, isExtractable, MAX_EXTRACT_SOURCE_BYTES } from './extract.mjs'
 
 const K1 = 1.2
 const B = 0.75
@@ -49,10 +53,16 @@ function snippetAround(content, terms) {
   return snippet
 }
 
+function folderOf(id) {
+  return id.includes('/') ? id.slice(0, id.lastIndexOf('/')) : ''
+}
+
 export function createSearch(library) {
   let cache = null // { signature, docs, df, avgLength }
+  /** Extracted text by `id:mtime:size`, so an unchanged file is read once. */
+  const extracted = new Map()
 
-  /** Flatten the tree the library API already builds into a list of note files. */
+  /** Every note and file in the tree the library API builds. */
   function flatten(nodes, out = []) {
     for (const node of nodes) {
       if (node.kind === 'folder') flatten(node.children, out)
@@ -61,25 +71,48 @@ export function createSearch(library) {
     return out
   }
 
+  /**
+   * The searchable text of a file that isn't a note, or '' when it has none.
+   * Cached by version; exposed so MCP's `read` shares the work.
+   */
+  async function fileText(node) {
+    if (!isExtractable(node.name) || node.size > MAX_EXTRACT_SOURCE_BYTES) return ''
+    const key = `${node.id}:${node.updatedAt}:${node.size}`
+    const hit = extracted.get(key)
+    if (hit !== undefined) return hit
+    let text = ''
+    try {
+      text = extractText(await library.readBuffer(node.id), node.name) ?? ''
+    } catch {
+      // Gone, or unreadable: nothing to index.
+    }
+    extracted.set(key, text)
+    return text
+  }
+
   async function buildIndex() {
     const files = flatten(await library.tree(''))
-    const signature = files.map((f) => `${f.id}:${f.updatedAt}`).join('|')
+    const signature = files.map((f) => `${f.id}:${f.updatedAt}:${f.size ?? ''}`).join('|')
     if (cache && cache.signature === signature) return cache
 
     const docs = []
     const df = new Map()
     let totalLength = 0
+    const live = new Set()
 
     for (const file of files) {
+      const isNote = file.kind === 'file'
       let content = ''
       try {
-        content = await library.readText(file.id)
+        content = isNote ? await library.readText(file.id) : await fileText(file)
       } catch {
         // Disappeared between the walk and the read — skip it.
         continue
       }
+      if (!isNote) live.add(`${file.id}:${file.updatedAt}:${file.size}`)
 
-      const titleTokens = tokenize(`${file.title} ${file.id.replace(/\//g, ' ')}`)
+      const title = isNote ? file.title : file.name
+      const titleTokens = tokenize(`${title} ${file.id.replace(/[/._-]/g, ' ')}`)
       const tokens = [
         ...Array.from({ length: TITLE_WEIGHT }, () => titleTokens).flat(),
         ...tokenize(content),
@@ -89,9 +122,12 @@ export function createSearch(library) {
       for (const token of tokens) tf.set(token, (tf.get(token) ?? 0) + 1)
       for (const token of tf.keys()) df.set(token, (df.get(token) ?? 0) + 1)
 
-      docs.push({ file, content, tf, length: tokens.length })
+      docs.push({ file, title, isNote, content, tf, length: tokens.length })
       totalLength += tokens.length
     }
+
+    // Forget the text of files that were replaced or removed.
+    for (const key of extracted.keys()) if (!live.has(key)) extracted.delete(key)
 
     cache = {
       signature,
@@ -103,10 +139,11 @@ export function createSearch(library) {
   }
 
   /**
-   * Rank notes against `query`. `folder` restricts the search to one subtree.
-   * Returns `{ path, title, folder, score, snippet, updatedAt }` objects.
+   * Rank notes and files against `query`. `folder` restricts the search to one
+   * subtree; `kind` to notes ('note') or other files ('file').
+   * Returns `{ path, title, folder, kind, score, snippet, updatedAt }` objects.
    */
-  async function search(query, { limit = 10, folder = '' } = {}) {
+  async function search(query, { limit = 10, folder = '', kind } = {}) {
     const terms = tokenize(query)
     if (!terms.length) return []
 
@@ -116,6 +153,8 @@ export function createSearch(library) {
 
     for (const doc of index.docs) {
       if (folder && !doc.file.id.startsWith(`${folder}/`)) continue
+      if (kind === 'note' && !doc.isNote) continue
+      if (kind === 'file' && doc.isNote) continue
 
       let score = 0
       for (const term of terms) {
@@ -129,21 +168,30 @@ export function createSearch(library) {
       }
       if (score <= 0) continue
 
-      scored.push({
+      const result = {
         path: doc.file.id,
-        title: doc.file.title,
-        folder: doc.file.id.includes('/')
-          ? doc.file.id.slice(0, doc.file.id.lastIndexOf('/'))
-          : '',
+        title: doc.title,
+        folder: folderOf(doc.file.id),
+        kind: doc.isNote ? 'note' : 'file',
         score: Number(score.toFixed(4)),
-        snippet: snippetAround(doc.content, terms),
+        snippet: doc.content ? snippetAround(doc.content, terms) : '',
         updatedAt: doc.file.updatedAt,
-      })
+      }
+      if (!doc.isNote) result.size = doc.file.size
+      scored.push(result)
     }
 
     scored.sort((a, b) => b.score - a.score)
     return scored.slice(0, limit)
   }
 
-  return { search }
+  /** The extracted text of one file, for MCP's `read` (null when there's none). */
+  async function textOf(path) {
+    const stat = await library.stat(path)
+    const name = path.slice(path.lastIndexOf('/') + 1)
+    const text = await fileText({ id: path, name, size: stat.size, updatedAt: stat.lastModified })
+    return text || null
+  }
+
+  return { search, textOf }
 }

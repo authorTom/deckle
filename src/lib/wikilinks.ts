@@ -1,4 +1,4 @@
-import type { NoteFile } from '../fs/library'
+import type { LibraryFile } from '../fs/library'
 
 /** `[[Target]]` or `[[Target|shown text]]`, never spanning a line break. */
 export const WIKILINK_RE = /\[\[([^\]|\n]+)(?:\|([^\]\n]+))?\]\]/g
@@ -34,16 +34,17 @@ function withoutExt(s: string): string {
 }
 
 /**
- * Resolve a wikilink target to a note id.
+ * Resolve a wikilink target to a note — or file — id.
  *
  * Tried in order: an exact path match, then a title match in the same folder as
  * the note doing the linking, then a title match anywhere. The folder-first rule
- * is what makes `[[Index]]` mean the local index rather than a random one.
+ * is what makes `[[Index]]` mean the local index rather than a random one. A
+ * file's title is its whole name, so `[[Q3 report.pdf]]` finds the PDF.
  * Returns null when nothing matches — the caller renders that as a broken link.
  */
 export function resolveWikilink(
   target: string,
-  files: NoteFile[],
+  files: LibraryFile[],
   fromNoteId: string | null = null,
 ): string | null {
   const wanted = normalize(withoutExt(target))
@@ -72,8 +73,8 @@ export function resolveWikilink(
 
 /** The text a new `[[…]]` should contain to point at `note` from `fromNoteId`. */
 export function wikilinkTargetFor(
-  note: NoteFile,
-  files: NoteFile[],
+  note: LibraryFile,
+  files: LibraryFile[],
   fromNoteId: string | null,
 ): string {
   // Prefer the bare title; fall back to the full path when the title is
@@ -97,11 +98,13 @@ export interface Backlink {
 /**
  * Notes that link to `targetId`, with a snippet of surrounding text.
  * `contents` is a map of note id → markdown; callers pass the cache they
- * already keep for search rather than re-reading the library.
+ * already keep for search rather than re-reading the library. `files` is every
+ * note and file, so a link resolves exactly as it does in the editor; only the
+ * entries with contents — the notes — are read as sources.
  */
 export function findBacklinks(
   targetId: string,
-  files: NoteFile[],
+  files: LibraryFile[],
   contents: Map<string, string>,
 ): Backlink[] {
   const out: Backlink[] = []

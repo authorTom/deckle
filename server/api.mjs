@@ -11,19 +11,27 @@
 // It requires the server library. A local-folder or in-browser library lives on the
 // user's device and there is nothing here for an agent to reach.
 //
+// Every write is recorded in the activity log under the name of the token that
+// made it (see activity.mjs), which is how a person reviews what an agent did.
+// The same library is also offered to agents over MCP, at /api/v1/mcp — see
+// mcp.mjs — behind the same tokens.
+//
 // The full surface is documented by the OpenAPI 3.1 document this serves at
 // GET /api/v1/openapi.json — that spec and this router must be changed together.
 
 import { randomUUID } from 'node:crypto'
-import { SECURITY_HEADERS } from './static.mjs'
+import { SECURITY_HEADERS, pipeFile } from './static.mjs'
 import { BadPathError } from './paths.mjs'
 import { TooLargeError } from './library-api.mjs'
 import {
   ApiError,
   isDataDir,
+  isNotePath,
+  normalizeFilePath,
   normalizeFolderPath,
   normalizeNotePath,
 } from './library-store.mjs'
+import { contentTypeFor } from './mime.mjs'
 import { buildOpenApi } from './openapi.mjs'
 import { VERSION } from './version.mjs'
 import { ClientGoneError, writeZip } from './zip.mjs'
@@ -108,12 +116,45 @@ function applyPrefix(nodes, prefix) {
   )
 }
 
+/** The notes in a tree — `kind: 'file'` — leaving other files out. */
 function flattenFiles(nodes, out = []) {
   for (const node of nodes) {
     if (node.kind === 'folder') flattenFiles(node.children, out)
+    else if (node.kind === 'file') out.push(node)
+  }
+  return out
+}
+
+/** Every entry in a tree that isn't a folder: notes and other files alike. */
+function flattenEntries(nodes, out = []) {
+  for (const node of nodes) {
+    if (node.kind === 'folder') flattenEntries(node.children, out)
     else out.push(node)
   }
   return out
+}
+
+/** A file's public description, from a tree node. */
+function describeEntry(node) {
+  const folder = node.id.includes('/') ? node.id.slice(0, node.id.lastIndexOf('/')) : ''
+  if (node.kind === 'file') {
+    return { path: node.id, name: node.name, folder, kind: 'note', ext: 'md', updatedAt: node.updatedAt }
+  }
+  return {
+    path: node.id,
+    name: node.name,
+    folder,
+    kind: 'file',
+    ext: node.ext,
+    size: node.size,
+    updatedAt: node.updatedAt,
+  }
+}
+
+/** RFC 5987 filename for Content-Disposition, safe for any Unicode name. */
+function dispositionFor(name) {
+  const ascii = name.replace(/[^\x20-\x7e]|["\\]/g, '_')
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`
 }
 
 // ---- Router ----------------------------------------------------------------
@@ -122,6 +163,8 @@ export function createApi({
   library,
   store,
   search,
+  activity,
+  mcp,
   auth,
   libraryEnabled,
   libraryName,
@@ -162,7 +205,7 @@ export function createApi({
     sendJson(req, res, status, { error: { code, message } }, extraHeaders)
   }
 
-  async function readBody(req) {
+  async function readText(req) {
     const chunks = []
     let size = 0
     for await (const chunk of req) {
@@ -170,8 +213,12 @@ export function createApi({
       if (size > MAX_BODY_BYTES) throw new TooLargeError('request body too large')
       chunks.push(chunk)
     }
-    if (!chunks.length) return {}
-    const text = Buffer.concat(chunks).toString('utf8')
+    return Buffer.concat(chunks).toString('utf8')
+  }
+
+  async function readBody(req) {
+    const text = await readText(req)
+    if (!text) return {}
     let parsed
     try {
       parsed = JSON.parse(text)
@@ -244,7 +291,7 @@ export function createApi({
     return await store.createNote({ path, content })
   }
 
-  async function patchNote(path, body) {
+  async function patchNote(path, body, log) {
     const existing = await store.readNote(path)
 
     // Validate the whole request before touching the disk. The move used to
@@ -280,6 +327,9 @@ export function createApi({
     // at its new home rather than leaving the old one updated.
     const current =
       target !== existing.path ? await store.moveNote(existing.path, target) : existing
+    if (current.path !== existing.path) {
+      await log({ action: 'moved', kind: 'note', path: existing.path, to: current.path })
+    }
     if (!edit) return current
 
     let content
@@ -293,7 +343,12 @@ export function createApi({
       content = `${edit.text}${separator}${current.content}`
     }
 
-    const { note } = await store.writeNote(current.path, content, 'ai')
+    const { note } = await store.writeNote(current.path, content, 'agent')
+    await log({
+      action: edit.kind === 'content' ? 'replaced' : edit.kind === 'append' ? 'appended to' : 'prepended to',
+      kind: 'note',
+      path: note.path,
+    })
     return note
   }
 
@@ -318,7 +373,7 @@ export function createApi({
         const content = requireString(item, 'content', { max: 4_000_000 })
         const path = folder ? `${folder}/${relative}` : relative
         if (overwrite) {
-          const { note, created } = await store.writeNote(path, content, 'ai')
+          const { note, created } = await store.writeNote(path, content, 'agent')
           imported.push({ path: note.path, created })
         } else {
           const note = await store.createNote({ path, content })
@@ -597,12 +652,117 @@ export function createApi({
   /** Colours the app already uses for projects and collections. */
   const PALETTE = ['#e5484d', '#f76808', '#ffb224', '#30a46c', '#0091ff', '#8e4ec6']
 
+  // ---- Files ---------------------------------------------------------------
+
+  async function listFiles(url) {
+    const folder = normalizeFolderPath(url.searchParams.get('folder') ?? '')
+    const recursive = url.searchParams.get('recursive') !== 'false'
+    const kind = url.searchParams.get('kind')
+    const limit = parseIntParam(url.searchParams.get('limit'), 200, { min: 1, max: 2000 })
+    const offset = parseIntParam(url.searchParams.get('offset'), 0)
+    if (folder && (await library.exists(folder)) !== 'directory') {
+      throw new ApiError(404, 'not_found', `no folder at "${folder}"`)
+    }
+    const tree = applyPrefix(await library.tree(folder), folder)
+    let entries = (recursive ? flattenEntries(tree) : tree.filter((n) => n.kind !== 'folder')).map(
+      describeEntry,
+    )
+    if (kind === 'note' || kind === 'file') entries = entries.filter((e) => e.kind === kind)
+    entries.sort((a, b) => b.updatedAt - a.updatedAt)
+    return { total: entries.length, limit, offset, files: entries.slice(offset, offset + limit) }
+  }
+
+  async function downloadFile(req, res, path) {
+    const info = await store.readFileInfo(path)
+    const { handle, size } = await library.openForRead(path)
+    res.writeHead(200, {
+      ...SECURITY_HEADERS,
+      ...corsHeaders(req),
+      'Content-Type': contentTypeFor(info.name),
+      'Content-Length': size,
+      'Content-Disposition': dispositionFor(info.name),
+      'Cache-Control': 'no-store',
+      'Last-Modified': new Date(info.updatedAt).toUTCString(),
+      // Whatever an agent stored, a browser that lands here renders nothing live.
+      'Content-Security-Policy': "sandbox; default-src 'none'",
+    })
+    pipeFile(res, handle)
+  }
+
+  async function uploadFile(req, url, path, log) {
+    const declared = Number(req.headers['content-length'] || 0)
+    if (declared > library.maxFileBytes) {
+      throw new ApiError(
+        413,
+        'too_large',
+        `files may be at most ${Math.round(library.maxFileBytes / (1024 * 1024))} MB (DECKLE_MAX_FILE_MB)`,
+      )
+    }
+    const existing = await library.exists(path)
+    if (existing === 'directory') throw new ApiError(409, 'conflict', `"${path}" is a folder`)
+    if (existing === 'file' && url.searchParams.get('overwrite') === 'false') {
+      throw new ApiError(409, 'conflict', `a file already exists at "${path}"`)
+    }
+    const message = url.searchParams.get('message') ?? req.headers['x-deckle-message']
+
+    // A note keeps its text history; any other file keeps its old copy in the bin.
+    if (isNotePath(path)) {
+      const { note, created } = await store.writeNote(path, await readText(req), 'agent')
+      await log({ action: created ? 'created' : 'replaced', kind: 'note', path: note.path, message })
+      return { status: created ? 201 : 200, body: { ...describeNoteFile(note) } }
+    }
+    const { file, created } = await store.putFile(path, req, { replacedBy: log.actor })
+    await log({ action: created ? 'saved' : 'replaced', kind: 'file', path: file.path, size: file.size, message })
+    return { status: created ? 201 : 200, body: file }
+  }
+
+  function describeNoteFile(note) {
+    return {
+      path: note.path,
+      name: note.path.slice(note.path.lastIndexOf('/') + 1),
+      folder: note.folder,
+      kind: 'note',
+      ext: 'md',
+      size: note.size,
+      updatedAt: note.updatedAt,
+    }
+  }
+
   // ---- Dispatch ------------------------------------------------------------
 
   async function route(req, res, url, segments, token) {
     const [head, ...rest] = segments
     const method = req.method
     const readOnly = token.scope === 'r'
+
+    /** Record a write under this token's name. */
+    const log = (event) => activity.record({ actor: token.name, via: 'api', ...event })
+    log.actor = token.name
+
+    // MCP carries reads and writes alike in POSTs, and decides per tool what a
+    // read-only token may do — so it is routed before the method check below.
+    if (head === 'mcp' && !rest.length) {
+      // The MCP spec asks servers to check Origin, against DNS rebinding. The
+      // bearer token already stops that; this refuses any browser page that
+      // DECKLE_API_CORS_ORIGINS hasn't named, whatever it holds. Agents send
+      // no Origin at all.
+      const origin = req.headers.origin
+      if (origin && !allowAllOrigins && !corsOrigins.includes(origin)) {
+        throw new ApiError(403, 'forbidden_origin', `requests from ${origin} are not allowed`)
+      }
+      await mcp.handleHttp(req, token, {
+        readBody: () => readText(req),
+        send: (status, body, headers = {}) => {
+          if (body === undefined) {
+            res.writeHead(status, { ...SECURITY_HEADERS, ...corsHeaders(req), ...headers })
+            res.end()
+            return
+          }
+          sendJson(req, res, status, body, headers)
+        },
+      })
+      return { handled: true }
+    }
 
     if (readOnly && WRITE_METHODS.has(method)) {
       throw new ApiError(
@@ -640,6 +800,7 @@ export function createApi({
         if (method === 'GET') return { status: 200, body: await listNotes(url) }
         if (method === 'POST') {
           const note = await createNote(await readBody(req))
+          await log({ action: 'created', kind: 'note', path: note.path })
           return {
             status: 201,
             body: note,
@@ -663,20 +824,23 @@ export function createApi({
         const { note, created } = await store.writeNote(
           path,
           requireString(body, 'content', { max: 4_000_000 }),
-          'ai',
+          'agent',
         )
+        await log({ action: created ? 'created' : 'replaced', kind: 'note', path: note.path })
         return { status: created ? 201 : 200, body: note }
       }
       if (method === 'PATCH') {
-        return { status: 200, body: await patchNote(path, await readBody(req)) }
+        return { status: 200, body: await patchNote(path, await readBody(req), log) }
       }
       if (method === 'DELETE') {
         await store.readNote(path) // 404 before doing anything
         if (boolParam(url.searchParams.get('permanent'))) {
           await library.remove(path, false)
+          await log({ action: 'erased', kind: 'note', path })
           return { status: 200, body: { deleted: path, permanent: true } }
         }
-        const entry = await store.trashNote(path)
+        const entry = await store.trashEntry(path, { by: token.name })
+        await log({ action: 'deleted', kind: 'note', path })
         return { status: 200, body: { deleted: path, permanent: false, trash: entry } }
       }
       throw methodNotAllowed(method)
@@ -686,9 +850,11 @@ export function createApi({
     if (head === 'search' && method === 'GET') {
       const q = url.searchParams.get('q') ?? url.searchParams.get('query') ?? ''
       if (!q.trim()) throw new ApiError(400, 'invalid_query', '"q" is required')
+      const kind = url.searchParams.get('kind')
       const results = await search.search(q, {
         limit: parseIntParam(url.searchParams.get('limit'), 10, { min: 1, max: 100 }),
         folder: normalizeFolderPath(url.searchParams.get('folder') ?? ''),
+        kind: kind === 'note' || kind === 'file' ? kind : undefined,
       })
       return { status: 200, body: { query: q, count: results.length, results } }
     }
@@ -708,6 +874,7 @@ export function createApi({
           const path = normalizeFolderPath(requireString(body, 'path', { max: 1024 }))
           if (!path) throw new ApiError(400, 'invalid_path', '"path" is required')
           await library.mkdir(path)
+          await log({ action: 'created', kind: 'folder', path })
           return { status: 201, body: { path } }
         }
         throw methodNotAllowed(method)
@@ -719,18 +886,85 @@ export function createApi({
         if ((await library.exists(path)) !== 'directory') {
           throw new ApiError(404, 'not_found', `no folder at "${path}"`)
         }
-        // Match the app: notes inside go to the recycle bin, not oblivion.
-        const notes = flattenFiles(applyPrefix(await library.tree(path), path))
-        for (const note of notes) await store.trashNote(note.id)
-        await library.remove(path, true)
-        return { status: 200, body: { deleted: path, trashed: notes.length } }
+        // Match the app: everything inside — notes and files — goes to the
+        // recycle bin, not oblivion.
+        const trashed = await store.trashFolder(path, { by: token.name })
+        await log({ action: 'deleted', kind: 'folder', path, count: trashed })
+        return { status: 200, body: { deleted: path, trashed } }
       }
       throw methodNotAllowed(method)
     }
 
     // -- import / export --------------------------------------------------
     if (head === 'import' && method === 'POST') {
-      return { status: 200, body: await importNotes(await readBody(req)) }
+      const body = await readBody(req)
+      const result = await importNotes(body)
+      if (result.imported) {
+        await log({
+          action: 'imported',
+          kind: 'note',
+          path: normalizeFolderPath(body?.folder ?? '') || undefined,
+          count: result.imported,
+        })
+      }
+      return { status: 200, body: result }
+    }
+
+    // -- files (any type) ------------------------------------------------
+    if (head === 'files') {
+      if (!rest.length) {
+        if (method === 'GET') return { status: 200, body: await listFiles(url) }
+        throw methodNotAllowed(method)
+      }
+      const path = normalizeFilePath(rest.join('/'))
+      if (method === 'GET') {
+        if ((await library.exists(path)) === 'directory') {
+          throw new ApiError(409, 'conflict', `"${path}" is a folder — list it with GET /files?folder=`)
+        }
+        if (url.searchParams.get('meta') === 'true') {
+          return { status: 200, body: await store.readFileInfo(path) }
+        }
+        await downloadFile(req, res, path)
+        return { handled: true }
+      }
+      if (method === 'PUT') return await uploadFile(req, url, path, log)
+      if (method === 'DELETE') {
+        const kind = await library.exists(path)
+        if (kind === 'directory') {
+          throw new ApiError(409, 'conflict', `"${path}" is a folder — use DELETE /folders/{path}`)
+        }
+        if (!kind) throw new ApiError(404, 'not_found', `no file at "${path}"`)
+        const fileKind = isNotePath(path) ? 'note' : 'file'
+        if (boolParam(url.searchParams.get('permanent'))) {
+          await library.remove(path, false)
+          await log({ action: 'erased', kind: fileKind, path })
+          return { status: 200, body: { deleted: path, permanent: true } }
+        }
+        const entry = await store.trashEntry(path, { by: token.name })
+        await log({ action: 'deleted', kind: fileKind, path })
+        return { status: 200, body: { deleted: path, permanent: false, trash: entry } }
+      }
+      throw methodNotAllowed(method)
+    }
+
+    // -- activity --------------------------------------------------------
+    if (head === 'activity' && !rest.length && method === 'GET') {
+      const sinceRaw = url.searchParams.get('since')
+      let since
+      if (sinceRaw) {
+        since = /^\d+$/.test(sinceRaw) ? Number(sinceRaw) : Date.parse(sinceRaw)
+        if (!Number.isFinite(since)) {
+          throw new ApiError(400, 'invalid_query', '"since" must be a date or a time in milliseconds')
+        }
+      }
+      const events = await activity.list({
+        since,
+        limit: parseIntParam(url.searchParams.get('limit'), 100, { min: 1, max: 1000 }),
+        project: url.searchParams.get('project') || undefined,
+        actor: url.searchParams.get('actor') || undefined,
+        path: url.searchParams.get('path') || undefined,
+      })
+      return { status: 200, body: { count: events.length, events } }
     }
     if (head === 'export' && method === 'GET') {
       await exportZip(req, res, url)
@@ -746,7 +980,9 @@ export function createApi({
           return { status: 200, body: { count: tasks.length, tasks } }
         }
         if (method === 'POST') {
-          return { status: 201, body: await createTask(await readBody(req)) }
+          const task = await createTask(await readBody(req))
+          await log({ action: 'added', kind: 'task', message: task.title })
+          return { status: 201, body: task }
         }
         throw methodNotAllowed(method)
       }
@@ -759,7 +995,14 @@ export function createApi({
         return { status: 200, body: task }
       }
       if (method === 'PATCH') {
-        return { status: 200, body: await patchTask(id, await readBody(req)) }
+        const body = await readBody(req)
+        const task = await patchTask(id, body)
+        await log({
+          action: body.completed === true ? 'completed' : 'updated',
+          kind: 'task',
+          message: task.title,
+        })
+        return { status: 200, body: task }
       }
       if (method === 'DELETE') {
         const permanent = boolParam(url.searchParams.get('permanent'))
@@ -774,6 +1017,7 @@ export function createApi({
           data.tasks[index].deletedAt = Date.now()
           return { id, permanent: false }
         })
+        await log({ action: 'deleted', kind: 'task', message: id })
         return { status: 200, body: { deleted: result.id, permanent: result.permanent } }
       }
       throw methodNotAllowed(method)
@@ -814,7 +1058,9 @@ export function createApi({
           return { status: 200, body: { count: bookmarks.length, bookmarks } }
         }
         if (method === 'POST') {
-          return { status: 201, body: await createBookmark(await readBody(req)) }
+          const bookmark = await createBookmark(await readBody(req))
+          await log({ action: 'saved', kind: 'bookmark', message: `${bookmark.title} — ${bookmark.url}` })
+          return { status: 201, body: bookmark }
         }
         throw methodNotAllowed(method)
       }
@@ -883,6 +1129,7 @@ export function createApi({
         if (!entry) throw new ApiError(404, 'not_found', 'no such snapshot')
         const content = await store.readSnapshot(rest[0])
         const { note } = await store.writeNote(entry.noteId, content, 'restore')
+        await log({ action: 'restored a version of', kind: 'note', path: note.path })
         return { status: 200, body: note }
       }
       throw methodNotAllowed(method)
@@ -895,10 +1142,17 @@ export function createApi({
         return { status: 200, body: { count: items.length, items } }
       }
       if (rest.length === 2 && rest[1] === 'restore' && method === 'POST') {
-        return { status: 200, body: await store.restoreTrash(rest[0]) }
+        const restored = await store.restoreTrash(rest[0])
+        await log({
+          action: 'restored',
+          kind: isNotePath(restored.path) ? 'note' : 'file',
+          path: restored.path,
+        })
+        return { status: 200, body: restored }
       }
       if (rest.length === 1 && method === 'DELETE') {
         await store.deleteTrashItem(rest[0])
+        await log({ action: 'erased from the bin', message: rest[0] })
         return { status: 200, body: { deleted: rest[0] } }
       }
       throw methodNotAllowed(method)

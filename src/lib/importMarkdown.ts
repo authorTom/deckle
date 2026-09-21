@@ -1,10 +1,13 @@
-// Turning what a user drops or picks into notes the library can write.
+// Turning what a user drops or picks into notes and files the library can write.
 //
 // Three entry shapes, because the browser hands over folder structure in three
 // different ways: a `<input webkitdirectory>` puts it on `file.webkitRelativePath`,
 // a drag-and-drop only exposes it through the (non-standard but universally
 // supported) `webkitGetAsEntry` directory reader, and a ZIP carries its own
 // paths inside the archive.
+//
+// Markdown and plain text become notes. Everything else — PDFs, spreadsheets,
+// images, source files — is stored as it is, beside them.
 
 import type { ImportItem } from '../fs/library'
 import { isZipName, unzip } from './unzip'
@@ -15,6 +18,32 @@ const IMPORTABLE = /\.(md|markdown|txt|text)$/i
 
 /** Anything bigger than this isn't a note; refuse rather than freeze the tab. */
 const MAX_FILE_BYTES = 8 * 1024 * 1024
+
+/**
+ * The largest other file an import brings in. Matches the server library's
+ * default cap (DECKLE_MAX_FILE_MB); a server set lower still refuses a file
+ * over its own limit when it is written.
+ */
+const MAX_ASSET_BYTES = 100 * 1024 * 1024
+
+/**
+ * Folders that are never anyone's knowledge: dependency and build caches that
+ * would bury a project's real files under thousands of others.
+ */
+const SKIP_FOLDERS = new Set(['node_modules', '__pycache__', 'venv', '.venv'])
+
+/**
+ * Hidden files and folders (`.git`, `.env`, `.DS_Store`) stay behind — the
+ * tree doesn't show them, and a `.env` is the last thing that belongs in a
+ * knowledge base — as do dependency caches.
+ */
+function isSkippedPath(path: string): boolean {
+  return path.split('/').some((segment) => segment.startsWith('.') || SKIP_FOLDERS.has(segment))
+}
+
+function megabytes(bytes: number): string {
+  return `${Math.round(bytes / (1024 * 1024))} MB`
+}
 
 /** A file that was left out, and why — so the summary can be honest. */
 export interface ImportSkip {
@@ -38,10 +67,6 @@ export function isImportable(name: string): boolean {
   return IMPORTABLE.test(name)
 }
 
-/** Everything the pickers should offer, including archives. */
-export const IMPORT_ACCEPT =
-  '.md,.markdown,.txt,.text,.zip,text/markdown,text/plain,application/zip'
-
 function emptySelection(): ImportSelection {
   return { items: [], skipped: [] }
 }
@@ -50,11 +75,16 @@ async function toItem(
   file: File,
   path: string,
 ): Promise<{ item?: ImportItem; skipped?: ImportSkip }> {
+  if (isSkippedPath(path)) return {}
   if (!isImportable(file.name)) {
-    return { skipped: { name: path, reason: 'not a Markdown file' } }
+    if (file.size > MAX_ASSET_BYTES) {
+      return { skipped: { name: path, reason: `larger than ${megabytes(MAX_ASSET_BYTES)}` } }
+    }
+    // Read lazily: a File is a handle, not the bytes, until it is written.
+    return { item: { path, blob: file } }
   }
   if (file.size > MAX_FILE_BYTES) {
-    return { skipped: { name: path, reason: 'larger than 8 MB' } }
+    return { skipped: { name: path, reason: `a note larger than ${megabytes(MAX_FILE_BYTES)}` } }
   }
   try {
     return { item: { path, content: await file.text() } }
@@ -91,7 +121,8 @@ function archivePrefix(paths: string[], fileName: string): string {
 }
 
 /**
- * Expand a ZIP into import items.
+ * Expand a ZIP into import items — its notes as notes, everything else as
+ * files, keeping the archive's folders.
  *
  * A malformed archive is reported as one skip rather than thrown: an import of
  * five files where one is a broken ZIP should still bring in the other four.
@@ -103,14 +134,17 @@ async function expandArchive(file: File, path: string): Promise<ImportSelection>
   let result
   try {
     result = await unzip(await file.arrayBuffer(), {
-      maxFileBytes: MAX_FILE_BYTES,
-      filter: (entryPath) => {
-        if (isImportable(entryPath)) return true
-        out.skipped.push({
-          name: `${path}/${entryPath}`,
-          reason: 'not a Markdown file',
-        })
-        return false
+      maxFileBytes: MAX_ASSET_BYTES,
+      filter: (entryPath, size) => {
+        if (isSkippedPath(entryPath)) return false
+        if (isImportable(entryPath) && size > MAX_FILE_BYTES) {
+          out.skipped.push({
+            name: `${path}/${entryPath}`,
+            reason: `a note larger than ${megabytes(MAX_FILE_BYTES)}`,
+          })
+          return false
+        }
+        return true
       },
     })
   } catch (err) {
@@ -130,10 +164,12 @@ async function expandArchive(file: File, path: string): Promise<ImportSelection>
     file.name,
   )
   for (const entry of result.files) {
-    out.items.push({
-      path: `${prefix}${entry.path}`,
-      content: decoder.decode(entry.bytes),
-    })
+    out.items.push(
+      isImportable(entry.path)
+        ? { path: `${prefix}${entry.path}`, content: decoder.decode(entry.bytes) }
+        : // unzip allocates plain ArrayBuffers; the type just can't prove it isn't shared.
+          { path: `${prefix}${entry.path}`, blob: new Blob([entry.bytes as Uint8Array<ArrayBuffer>]) },
+    )
   }
 
   return out
@@ -240,7 +276,7 @@ async function walkEntry(
     return
   }
 
-  if (entry.isDirectory && !entry.name.startsWith('.')) {
+  if (entry.isDirectory && !entry.name.startsWith('.') && !SKIP_FOLDERS.has(entry.name)) {
     for (const child of await readAllEntries(entry)) {
       await walkEntry(child, path, out, onProgress)
     }

@@ -19,9 +19,11 @@ import { createApiAuth } from './api-auth.mjs'
 import { createApi } from './api.mjs'
 import { createSearch } from './search.mjs'
 import { createStaticHandler, pipeFile, SECURITY_HEADERS } from './static.mjs'
-import { createLibraryApi, TooLargeError } from './library-api.mjs'
+import { createLibraryApi, DEFAULT_MAX_FILE_BYTES, TooLargeError } from './library-api.mjs'
 import { createLibraryStore } from './library-store.mjs'
-import { createSettingsStore, InvalidSettingsError, MAX_SETTINGS_BYTES } from './settings-store.mjs'
+import { createActivityLog } from './activity.mjs'
+import { createProjects } from './projects.mjs'
+import { createMcp } from './mcp.mjs'
 import { BadPathError } from './paths.mjs'
 import { resolveLegacyEnv } from './legacy-env.mjs'
 import { parseTrustProxy } from './throttle.mjs'
@@ -31,6 +33,25 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 
 /** A body that parses as JSON but isn't the object every endpoint expects. */
 class InvalidBodyError extends Error {}
+
+/** DECKLE_MAX_FILE_MB, as bytes. Blank means the default. */
+function readMaxFileBytes(raw) {
+  if (raw === undefined || raw === '') return DEFAULT_MAX_FILE_BYTES
+  const mb = Number(raw)
+  if (!Number.isFinite(mb) || mb <= 0 || mb > 10_240) {
+    throw new Error(`DECKLE_MAX_FILE_MB must be a number of megabytes between 1 and 10240, got "${raw}"`)
+  }
+  return Math.round(mb * 1024 * 1024)
+}
+
+/** DECKLE_PROJECTS_DIR: a plain library-relative folder, no dot segments. */
+function readProjectsDir(raw) {
+  const value = String(raw ?? '').trim().replace(/^\/+|\/+$/g, '') || 'Projects'
+  if (value.split('/').some((s) => !s || s === '..' || s.startsWith('.'))) {
+    throw new Error(`DECKLE_PROJECTS_DIR must be a folder inside the library, such as "Projects", got "${raw}"`)
+  }
+  return value
+}
 
 function readPort(raw) {
   const port = Number(raw || 8080)
@@ -56,33 +77,48 @@ export function createApp(rawEnv = process.env, { log = console.log, warn = cons
     libraryDir,
     libraryName: env.DECKLE_LIBRARY_NAME || 'My Notes',
     libraryEnabled: env.DECKLE_SERVER_LIBRARY === 'true',
-    // Deckle's own state — not notes, and not part of the library, but kept
-    // under the library directory by default because that is the volume
-    // people mount. The library API refuses to serve it wherever it lives.
+    // Deckle's own state — not notes, and not part of the library. Nothing is
+    // written there any more, but Deckle 2.x kept the AI assistant's settings
+    // (provider API key included) in it, so a volume that has been upgraded
+    // may still hold one. The library API refuses to serve it wherever it
+    // lives, and must go on refusing: an old key must never leave in an
+    // export, through /api/v1, or over MCP.
     stateDir: path.resolve(env.DECKLE_STATE_DIR || path.join(libraryDir, '.deckle-state')),
     trustProxy: parseTrustProxy(env.DECKLE_TRUST_PROXY),
+    maxFileBytes: readMaxFileBytes(env.DECKLE_MAX_FILE_MB),
+    projectsDir: readProjectsDir(env.DECKLE_PROJECTS_DIR),
     legacyEnv,
   }
 
   const auth = createAuth(env)
-  const library = createLibraryApi(config.libraryDir, { reservedPaths: [config.stateDir] })
-  const settingsStore = createSettingsStore(config.stateDir)
-
-  // Shared assistant settings are offered only behind a password. Without one
-  // the API is open by design (the deployment guide assumes a VPN or an
-  // authenticating proxy in front), and an open endpoint handing out a provider
-  // key is not a trade this server gets to make on the user's behalf.
-  const sharedSettings = config.libraryEnabled && auth.required
+  const library = createLibraryApi(config.libraryDir, {
+    reservedPaths: [config.stateDir],
+    maxFileBytes: config.maxFileBytes,
+  })
   const serveStatic = createStaticHandler(config.publicDir)
 
   // The machine API (/api/v1): off unless tokens are configured, and useless
   // without the server library, since a local-folder library never reaches this
   // process at all.
   const apiAuth = createApiAuth(env, warn)
+  const store = createLibraryStore(library)
+  const search = createSearch(library)
+  const activity = createActivityLog(library, { projectsDir: config.projectsDir })
+  const projects = createProjects({ library, store, projectsDir: config.projectsDir })
   const handleApi = createApi({
     library,
-    store: createLibraryStore(library),
-    search: createSearch(library),
+    store,
+    search,
+    activity,
+    mcp: createMcp({
+      library,
+      store,
+      search,
+      activity,
+      projects,
+      libraryName: config.libraryName,
+      maxFileBytes: config.maxFileBytes,
+    }),
     auth: apiAuth,
     libraryEnabled: config.libraryEnabled,
     libraryName: config.libraryName,
@@ -140,9 +176,9 @@ export function createApp(rawEnv = process.env, { log = console.log, warn = cons
         name: config.libraryName,
         authRequired: auth.required,
         authenticated: config.libraryEnabled && auth.isAuthenticated(req),
-        // Whether this server will hold the assistant's settings for every
-        // device, so the app can say why it won't when it won't.
-        sharedSettings,
+        // Where projects live, so the app's Projects view looks in the same
+        // folder the MCP tools write to.
+        projectsDir: config.projectsDir,
       })
       return true
     }
@@ -197,71 +233,6 @@ export function createApp(rawEnv = process.env, { log = console.log, warn = cons
     }
 
     return false
-  }
-
-  // ---- /api/assistant-settings -----------------------------------------------
-
-  /**
-   * The assistant's settings, shared by every device signed in to this server.
-   *
-   * Gated exactly like the library routes — same-origin app header, then the
-   * session cookie — plus the password requirement above. The stored object is
-   * whatever the app sent; this endpoint is a shelf, not a schema.
-   */
-  async function handleAssistantSettingsRoutes(req, res, url) {
-    if (url.pathname !== '/api/assistant-settings') return false
-
-    if (!config.libraryEnabled) {
-      sendJson(res, 404, { error: 'server library disabled' })
-      return true
-    }
-    if (!hasAppHeader(req)) {
-      sendJson(res, 403, { error: 'forbidden' })
-      return true
-    }
-    if (!sharedSettings) {
-      sendJson(res, 409, {
-        error: 'password_required',
-        message:
-          'Set DECKLE_PASSWORD to share assistant settings between devices. ' +
-          'Without it this server is open, and anyone who can reach it could read the key.',
-      })
-      return true
-    }
-    if (!auth.isAuthenticated(req)) {
-      sendJson(res, 401, { error: 'not authenticated' })
-      return true
-    }
-
-    if (req.method === 'GET') {
-      sendJson(res, 200, { settings: await settingsStore.read() })
-      return true
-    }
-
-    if (req.method === 'PUT') {
-      let body
-      try {
-        body = await readJsonBody(req, MAX_SETTINGS_BYTES)
-      } catch (err) {
-        if (err instanceof TooLargeError) throw err
-        sendJson(res, 400, { error: 'invalid request' })
-        return true
-      }
-      try {
-        await settingsStore.write(body.settings)
-      } catch (err) {
-        if (err instanceof InvalidSettingsError) {
-          sendJson(res, 400, { error: err.message })
-          return true
-        }
-        throw err
-      }
-      sendJson(res, 200, { ok: true })
-      return true
-    }
-
-    sendJson(res, 405, { error: 'method not allowed' })
-    return true
   }
 
   // ---- /api/library ----------------------------------------------------------
@@ -328,6 +299,13 @@ export function createApp(rawEnv = process.env, { log = console.log, warn = cons
         sendJson(res, 200, { ok: true })
         return true
 
+      // A rename, so moving a large file — into a folder, or into the recycle
+      // bin — costs one request and no transfer. The File System Access API
+      // has no portable move, which is why the handle shim can't express it.
+      case 'POST /api/library/move':
+        sendJson(res, 200, await library.rename(rel, url.searchParams.get('to') ?? ''))
+        return true
+
       case 'DELETE /api/library/entry':
         await library.remove(rel, url.searchParams.get('recursive') === '1')
         sendJson(res, 200, { ok: true })
@@ -356,7 +334,6 @@ export function createApp(rawEnv = process.env, { log = console.log, warn = cons
         // never be reachable with the app's session cookie.
         if (await handleApi(req, res, url)) return
         if (await handleServerLibraryRoutes(req, res, url)) return
-        if (await handleAssistantSettingsRoutes(req, res, url)) return
         if (await handleLibraryRoutes(req, res, url)) return
 
         if (url.pathname.startsWith('/api/')) {
@@ -443,11 +420,6 @@ export function createApp(rawEnv = process.env, { log = console.log, warn = cons
           ? '[deckle] server library is password protected'
           : '[deckle] WARNING: server library has no password (DECKLE_PASSWORD unset) — anyone who can reach this port can read and write your notes',
       )
-      log(
-        sharedSettings
-          ? `[deckle] assistant settings shared across devices, stored in ${config.stateDir}`
-          : '[deckle] assistant settings stay in each browser (sharing them needs DECKLE_PASSWORD)',
-      )
     } else {
       log('[deckle] server library disabled (set DECKLE_SERVER_LIBRARY=true to enable)')
     }
@@ -466,6 +438,12 @@ export function createApp(rawEnv = process.env, { log = console.log, warn = cons
       )
     } else {
       log(`[deckle] API enabled at /api/v1 — tokens: ${apiAuth.describe().join(', ')}`)
+      log('[deckle] MCP server at /api/v1/mcp (same tokens)')
+    }
+    if (config.libraryEnabled) {
+      log(
+        `[deckle] projects live in ${config.projectsDir}/; files up to ${Math.round(config.maxFileBytes / (1024 * 1024))} MB`,
+      )
     }
   }
 

@@ -1,6 +1,6 @@
 // The app's library code, end to end, against the real server: src/fs/remote.ts
 // presents the server's file API as a FileSystemDirectoryHandle, and everything
-// above it — notes, trash, history, stores, the queue — must work through it
+// above it — notes, trash, history, the stores — must work through it
 // exactly as it does on a local folder.
 
 import fs from 'node:fs/promises'
@@ -12,8 +12,6 @@ import * as remote from '../../src/fs/remote'
 import * as library from '../../src/fs/library'
 import * as history from '../../src/fs/history'
 import { loadTaskStore, saveTaskStore } from '../../src/tasks/store'
-import { loadIndex, newRunId, saveRun } from '../../src/queue/store'
-import { createMemory, loadMemories } from '../../src/memory/store'
 
 type Server = Awaited<ReturnType<typeof startServer>>
 
@@ -77,29 +75,50 @@ describe('the server library through the handle adapter', () => {
     await expect(fs.stat(path.join(s.root, 'etc'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
-  it('keeps history, tasks, the queue and memory in the library', async () => {
+  it('moves, renames, bins and restores files byte for byte, without re-uploading them', async () => {
+    const bytes = new Uint8Array(Array.from({ length: 5000 }, (_, i) => (i * 13 + 5) % 256))
+    const same = async (file: Blob) => {
+      const got = new Uint8Array(await file.arrayBuffer())
+      return got.length === bytes.length && got.every((b, i) => b === bytes[i])
+    }
+    await library.writeBlob(dir, 'Inbox/scan.pdf', new Blob([bytes]))
+    const tree = await library.buildTree(dir)
+    expect(library.flattenAssets(tree)).toContainEqual(
+      expect.objectContaining({ id: 'Inbox/scan.pdf', kind: 'asset', ext: 'pdf', size: 5000 }),
+    )
+
+    // Moves go through the server's rename: count the file uploads to prove it.
+    const puts: string[] = []
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(((input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PUT') puts.push(String(input))
+      return realFetch(typeof input === 'string' && input.startsWith('/') ? `${base}${input}` : input, init)
+    }) as typeof fetch)
+    try {
+      expect(await library.moveNote(dir, 'Inbox/scan.pdf', 'Projects/Acme')).toBe('Projects/Acme/scan.pdf')
+      expect(await library.renameAsset(dir, 'Projects/Acme/scan.pdf', 'Signed contract')).toBe(
+        'Projects/Acme/Signed contract.pdf',
+      )
+      await library.trashNote(dir, 'Projects/Acme/Signed contract.pdf')
+    } finally {
+      spy.mockRestore()
+    }
+    expect(puts.filter((u) => !u.includes('.trash%2Findex.json'))).toEqual([])
+
+    const item = (await library.listTrash(dir)).find((i) => i.originalPath === 'Projects/Acme/Signed contract.pdf')!
+    expect(item).toMatchObject({ kind: 'file', title: 'Signed contract.pdf' })
+    expect(await library.restoreTrash(dir, item.trashName)).toBe('Projects/Acme/Signed contract.pdf')
+    expect(await same(await library.readBlob(dir, 'Projects/Acme/Signed contract.pdf'))).toBe(true)
+    const onDisk = await fs.readFile(path.join(s.libraryDir, 'Projects/Acme/Signed contract.pdf'))
+    expect(onDisk.length).toBe(5000)
+  })
+
+  it('keeps history and tasks in the library', async () => {
     await history.snapshotNote(dir, 'Archive/Roadmap.md', 'older', 'edit')
     expect(await history.listHistory(dir, 'Archive/Roadmap.md')).toHaveLength(1)
 
     const store = { version: 1 as const, tasks: [], projects: [{ id: 'p', name: 'Garden', color: '#30a46c' }] }
     await saveTaskStore(dir, store)
     expect(await loadTaskStore(dir)).toEqual(store)
-
-    const id = newRunId()
-    await saveRun(dir, {
-      id,
-      title: 'Run',
-      prompt: 'p',
-      status: 'queued',
-      createdAt: 1,
-      messages: [],
-      writes: [],
-      attempt: 1,
-    })
-    expect((await loadIndex(dir)).runs.map((r) => r.id)).toContain(id)
-
-    await createMemory(dir, { summary: 'Prefers short answers', body: 'Said so.' })
-    expect((await loadMemories(dir, true)).map((m) => m.summary)).toContain('Prefers short answers')
   })
 
   it('never exports the server’s own state, even with hidden folders included', async () => {

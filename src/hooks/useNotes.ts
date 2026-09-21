@@ -11,7 +11,7 @@ import * as remote from '../fs/remote'
 import type {
   ImportItem,
   ImportedNote,
-  NoteFile,
+  LibraryFile,
   TreeNode,
   TrashItem,
 } from '../fs/library'
@@ -131,7 +131,12 @@ export function useNotes() {
   // Open tabs, in strip order. The active note is always a member.
   const [openIds, setOpenIds] = useState<string[]>(() => readStoredList(TABS_KEY))
 
+  // Notes are what the editor, backlinks and note search work on; assets are
+  // every other file. Tabs and panes hold either, so most bookkeeping below
+  // checks ids against both.
   const files = useMemo(() => library.flattenFiles(tree), [tree])
+  const assets = useMemo(() => library.flattenAssets(tree), [tree])
+  const allFiles = useMemo<LibraryFile[]>(() => [...files, ...assets], [files, assets])
 
   // Server library availability, discovered once at startup. null = this build
   // isn't served by the Deckle server, so the option isn't offered at all.
@@ -193,10 +198,11 @@ export function useNotes() {
     }
   }, [])
 
-  const refresh = useCallback(async (d: FileSystemDirectoryHandle) => {
+  /** Rebuild the tree; returns every note and file in it, notes first. */
+  const refresh = useCallback(async (d: FileSystemDirectoryHandle): Promise<LibraryFile[]> => {
     const t = await library.buildTree(d)
     setTree(t)
-    return library.flattenFiles(t)
+    return [...library.flattenFiles(t), ...library.flattenAssets(t)]
   }, [])
 
   // ---- One library mutation at a time ----
@@ -244,14 +250,15 @@ export function useNotes() {
   }, [status, dir, refresh])
 
   // ---- Load each pane's content from disk ----
+  // Notes only: a file that isn't one is read by its viewer, as bytes.
   useEffect(() => {
-    if (!dir || !activeId) {
+    if (activeId) store(ACTIVE_KEY, activeId)
+    if (!dir || !activeId || !library.isNoteId(activeId)) {
       setActiveDoc(null)
       return
     }
     let cancelled = false
     const id = activeId
-    store(ACTIVE_KEY, id)
     void (async () => {
       try {
         const text = await library.readNote(dir, id)
@@ -266,7 +273,7 @@ export function useNotes() {
   }, [dir, activeId])
 
   useEffect(() => {
-    if (!dir || !splitId) {
+    if (!dir || !splitId || !library.isNoteId(splitId)) {
       setSplitDoc(null)
       return
     }
@@ -294,14 +301,14 @@ export function useNotes() {
     setOpenIds((prev) => (prev.includes(activeId) ? prev : [...prev, activeId]))
   }, [activeId])
 
-  // Drop tabs whose notes no longer exist (deleted, renamed, or moved).
+  // Drop tabs whose notes or files no longer exist (deleted, renamed, or moved).
   useEffect(() => {
-    if (!files.length) return
+    if (!allFiles.length) return
     setOpenIds((prev) => {
-      const next = prev.filter((id) => files.some((f) => f.id === id))
+      const next = prev.filter((id) => allFiles.some((f) => f.id === id))
       return next.length === prev.length ? prev : next
     })
-  }, [files])
+  }, [allFiles])
 
   useEffect(() => store(TABS_KEY, openIds), [openIds])
   useEffect(() => store(SPLIT_KEY, splitId), [splitId])
@@ -499,6 +506,10 @@ export function useNotes() {
   // Buffered edits are keyed by note id: with tabs and a split pane, more than
   // one note can be dirty at a time, and each has to survive until it's written.
   const pending = useRef<Map<string, string>>(new Map())
+  // What each open note's file held the last time this app read or wrote it,
+  // so a reload can tell a change made by something else — an agent — from
+  // this app's own saves.
+  const lastKnown = useRef<Map<string, string>>(new Map())
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   // Per-note timestamp of the last history snapshot (throttles edit snapshots).
   const lastSnapshotAt = useRef<Map<string, number>>(new Map())
@@ -570,6 +581,7 @@ export function useNotes() {
           }
         }
         await library.writeNote(dir, id, content)
+        lastKnown.current.set(id, content)
         invalidateCached(id)
       }
       setLastSavedAt(Date.now())
@@ -700,14 +712,18 @@ export function useNotes() {
     }
   }, [])
 
-  // Rename a note's file to match a new title (commit on blur/Enter).
+  // Rename a note's file to match a new title (commit on blur/Enter) — or any
+  // other file, which keeps its extension unless a new one is typed.
   const renameNote = useCallback(
     (id: string, newTitle: string) =>
       queue(async () => {
         if (!dir || !id) return undefined
         await flush() // ensure latest content is on disk before moving the file
-        const newId = await library.renameNote(dir, id, newTitle)
-        if (newId !== id) await history.retargetHistory(dir, id, newId)
+        const isNote = library.isNoteId(id)
+        const newId = isNote
+          ? await library.renameNote(dir, id, newTitle)
+          : await library.renameAsset(dir, id, newTitle)
+        if (isNote && newId !== id) await history.retargetHistory(dir, id, newId)
         await refresh(dir)
         remapId(id, newId)
         // Returned so callers can tell a real rename from a no-op, and know the
@@ -779,7 +795,7 @@ export function useNotes() {
         if (!dir) return
         if (id === activeId) await flush() // persist edits before moving the file
         const newId = await library.moveNote(dir, id, targetFolderPath)
-        if (newId !== id) await history.retargetHistory(dir, id, newId)
+        if (newId !== id && library.isNoteId(id)) await history.retargetHistory(dir, id, newId)
         await refresh(dir)
         remapId(id, newId)
       }),
@@ -805,8 +821,9 @@ export function useNotes() {
         await flush()
         const imported = await library.importNotes(dir, items, targetFolder, onProgress)
         await refresh(dir)
-        // Open the first imported note so the upload visibly did something.
-        if (imported.length) setActiveId(imported[0].id)
+        // Open the first imported note (or file) so the upload visibly did something.
+        const first = imported.find((n) => n.isNote) ?? imported[0]
+        if (first) setActiveId(first.id)
         return imported
       }),
     [dir, flush, refresh, queue],
@@ -926,6 +943,16 @@ export function useNotes() {
     let cancelled = false
     const t = setTimeout(async () => {
       const out: SearchResult[] = []
+      // Files that aren't notes are found by name and folder. Their contents
+      // are searched by the server's index (GET /api/v1/search, and MCP),
+      // which can read inside office documents; the sidebar stays a quick
+      // filter over what is already in memory.
+      for (const asset of assets) {
+        const folderPath = asset.id.includes('/') ? asset.id.slice(0, asset.id.lastIndexOf('/')) : ''
+        if (asset.name.toLowerCase().includes(q) || folderPath.toLowerCase().includes(q)) {
+          out.push({ id: asset.id, title: asset.name, folderPath, snippet: '', kind: 'asset', name: asset.name })
+        }
+      }
       for (const file of files) {
         if (cancelled) return
         const folderPath = file.id.includes('/')
@@ -947,7 +974,7 @@ export function useNotes() {
         }
 
         if (titleMatch || contentMatch) {
-          out.push({ id: file.id, title: file.title, folderPath, snippet })
+          out.push({ id: file.id, title: file.title, folderPath, snippet, kind: 'file', name: file.name })
         }
       }
       if (!cancelled) setSearchResults(out)
@@ -956,22 +983,37 @@ export function useNotes() {
       cancelled = true
       clearTimeout(t)
     }
-  }, [query, dir, files])
+  }, [query, dir, files, assets])
 
   const activeNote = files.find((n) => n.id === activeId) ?? null
   const splitNote = files.find((n) => n.id === splitId) ?? null
-  /** Tabs resolved to notes, in strip order, skipping anything already gone. */
+  const activeAsset = assets.find((n) => n.id === activeId) ?? null
+  const splitAsset = assets.find((n) => n.id === splitId) ?? null
+  /** Tabs resolved to notes and files, in strip order, skipping anything gone. */
   const openNotes = useMemo(
     () =>
       openIds
-        .map((id) => files.find((f) => f.id === id))
-        .filter((f): f is NoteFile => !!f),
-    [openIds, files],
+        .map((id) => allFiles.find((f) => f.id === id))
+        .filter((f): f is LibraryFile => !!f),
+    [openIds, allFiles],
   )
 
-  // Reload after the AI assistant changes files on disk: rebuild the tree and
-  // re-read the open note's content, so an edit to the currently-open note shows
-  // up immediately instead of only after switching away and back.
+  // A pane's text arrives from disk; remember it as what the file held. Only
+  // open notes and unsaved ones are worth remembering.
+  useEffect(() => {
+    if (activeDoc) lastKnown.current.set(activeDoc.id, activeDoc.text)
+    if (splitDoc) lastKnown.current.set(splitDoc.id, splitDoc.text)
+    for (const id of [...lastKnown.current.keys()]) {
+      if (id !== activeDoc?.id && id !== splitDoc?.id && !pending.current.has(id)) {
+        lastKnown.current.delete(id)
+      }
+    }
+  }, [activeDoc, splitDoc])
+
+  // Reload after something else changed the library — an agent writing through
+  // the API, or a folder edited outside the app: rebuild the tree and re-read
+  // the open notes, so a change to the open note shows up without switching
+  // away and back.
   const reload = useCallback(async () => {
     if (!dir) return
     const list = await refresh(dir)
@@ -990,20 +1032,44 @@ export function useNotes() {
     }
     if (!activeId) return
 
+    // A note being typed in *and* changed on disk: the typing wins, as it
+    // always has — but the other version is kept in history first, rather
+    // than silently written over by the next save.
+    for (const id of pending.current.keys()) {
+      try {
+        const disk = await library.readNote(dir, id)
+        const known = lastKnown.current.get(id)
+        if (known !== undefined && disk !== known && disk.trim()) {
+          await history.snapshotNote(dir, id, disk, 'agent')
+        }
+      } catch {
+        // Gone or unreadable — nothing to keep.
+      }
+    }
+
     // Persist buffered edits before re-reading, so a keystroke made moments
-    // before the AI change isn't clobbered by stale disk content. In the rare
-    // case where the AI edited the very note being typed in, the user's
-    // buffer wins — deterministic, and the editor never diverges from disk.
+    // before the change isn't clobbered by stale disk content.
     await flush()
     try {
-      setActiveDoc({ id: activeId, text: await library.readNote(dir, activeId) })
-      if (splitId && survives(splitId)) {
+      if (library.isNoteId(activeId)) {
+        setActiveDoc({ id: activeId, text: await library.readNote(dir, activeId) })
+      }
+      if (splitId && survives(splitId) && library.isNoteId(splitId)) {
         setSplitDoc({ id: splitId, text: await library.readNote(dir, splitId) })
       }
     } catch {
       // Transient read failure — keep showing the current content.
     }
   }, [dir, refresh, activeId, splitId, flush])
+
+  /** A file's bytes, for the viewer and for images inside notes. */
+  const readFile = useCallback(
+    async (id: string): Promise<Blob> => {
+      if (!dir) throw new Error('No library is open.')
+      return await library.readBlob(dir, id)
+    },
+    [dir],
+  )
 
   return {
     status,
@@ -1012,10 +1078,15 @@ export function useNotes() {
     reload,
     tree,
     notes: files,
+    assets,
+    allFiles,
     activeNote,
+    activeAsset,
     activeId,
     activeContent,
     setActiveId,
+    readFile,
+    flush,
     // Tabs
     openNotes,
     openNote,
@@ -1026,6 +1097,7 @@ export function useNotes() {
     // Split pane
     splitId,
     splitNote,
+    splitAsset,
     splitContent,
     setSplitId,
     toggleSplit,
@@ -1078,6 +1150,9 @@ export interface SearchResult {
   title: string
   folderPath: string
   snippet: string
+  /** A note, or any other file (found by name). */
+  kind: 'file' | 'asset'
+  name: string
 }
 
 function makeSnippet(content: string, idx: number, len: number): string {
