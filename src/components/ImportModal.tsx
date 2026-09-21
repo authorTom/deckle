@@ -36,7 +36,7 @@ export interface ImportOutcome {
  * Files that have been read and are waiting to be told where to go.
  *
  * The destination is asked *after* the read rather than before it, because
- * only then is there anything worth saying: how many notes were found, and
+ * only then is there anything worth saying: how many files were found, and
  * whether the selection carried folders of its own.
  */
 export interface ImportPending {
@@ -114,11 +114,11 @@ export default function ImportModal({
         className={`modal${anim.entered ? ' entered' : ''}`}
         role="dialog"
         aria-modal="true"
-        aria-label="Import notes"
+        aria-label="Import files"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <span className="modal-title">Import notes</span>
+          <span className="modal-title">Import</span>
           <button
             type="button"
             className="icon-btn"
@@ -136,7 +136,7 @@ export default function ImportModal({
             <>
               <p className="modal-note">
                 <strong>
-                  {pending.notes} note{pending.notes === 1 ? '' : 's'} ready to
+                  {pending.notes} file{pending.notes === 1 ? '' : 's'} ready to
                   import
                 </strong>
                 {pending.skipped > 0 && (
@@ -167,7 +167,7 @@ export default function ImportModal({
                 <span>
                   {progress.phase === 'reading'
                     ? 'Reading files…'
-                    : 'Writing notes into your library…'}
+                    : 'Writing into your library…'}
                 </span>
                 {known && (
                   <span className="import-progress-count">
@@ -180,7 +180,7 @@ export default function ImportModal({
                 className={`progress-track${known ? '' : ' indeterminate'}`}
                 role="progressbar"
                 aria-label={
-                  progress.phase === 'reading' ? 'Reading files' : 'Writing notes'
+                  progress.phase === 'reading' ? 'Reading files' : 'Writing files'
                 }
                 aria-valuemin={0}
                 aria-valuemax={100}
@@ -225,20 +225,20 @@ export default function ImportModal({
                 <div>
                   <strong>
                     {outcome.imported
-                      ? `Imported ${outcome.imported} note${
+                      ? `Imported ${outcome.imported} file${
                           outcome.imported === 1 ? '' : 's'
                         } into ${outcome.folder || libraryName || 'the library root'}`
                       : 'Nothing was imported'}
                   </strong>
                   {outcome.renamed > 0 && (
                     <div className="import-result-detail">
-                      {outcome.renamed} landed under a new name — a note of that
-                      name was already there, and nothing is ever overwritten.
+                      {outcome.renamed} landed under a new name — something of
+                      that name was already there, and nothing is ever overwritten.
                     </div>
                   )}
                   {!outcome.imported && !outcome.skipped.length && (
                     <div className="import-result-detail">
-                      There were no Markdown files in that selection.
+                      There was nothing to import in that selection.
                     </div>
                   )}
                 </div>
@@ -279,7 +279,7 @@ export default function ImportModal({
               </button>
               <button type="button" className="btn-primary" onClick={start}>
                 <Upload size={15} />
-                Import {pending.notes} note{pending.notes === 1 ? '' : 's'}
+                Import {pending.notes} file{pending.notes === 1 ? '' : 's'}
               </button>
             </>
           ) : (

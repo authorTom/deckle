@@ -113,11 +113,13 @@ describe('createZip + unzip', () => {
 })
 
 describe('selectionFromFiles', () => {
-  it('reads Markdown, expands archives into a folder, and says what it skipped', async () => {
+  it('reads notes and files, expands archives into a folder, and says what it skipped', async () => {
     const loose = await archive([
       { path: 'one.md', content: '# One' },
       { path: 'two.txt', content: 'Two' },
       { path: 'photo.jpg', content: 'jpg' },
+      { path: 'node_modules/dep/index.js', content: 'noise' },
+      { path: '.env', content: 'SECRET=1' },
     ])
     const rooted = await archive([
       { path: 'Research/a.md', content: 'A' },
@@ -127,23 +129,26 @@ describe('selectionFromFiles', () => {
     const selection = await selectionFromFiles([
       new File(['# Hello'], 'hello.md'),
       new File(['png'], 'image.png'),
+      new File(['KEY=1'], '.env'),
       new File([loose as BlobPart], 'my-notes.zip'),
       new File([rooted as BlobPart], 'research.zip'),
       new File(['not a zip at all'], 'broken.zip'),
     ])
 
+    // Notes as notes and everything else as files; hidden files and
+    // dependency caches stay behind without comment.
     expect(selection.items.map((i) => i.path)).toEqual([
       'hello.md',
+      'image.png',
       'my-notes/one.md',
       'my-notes/two.txt',
+      'my-notes/photo.jpg',
       'Research/a.md',
       'Research/b.md',
     ])
     expect(selection.items[0].content).toBe('# Hello')
-    expect(selection.skipped.map((s) => s.name)).toEqual([
-      'image.png',
-      'my-notes.zip/photo.jpg',
-      'broken.zip',
-    ])
+    expect(selection.items[1].blob).toBeInstanceOf(Blob)
+    expect(await selection.items[4].blob!.text()).toBe('jpg')
+    expect(selection.skipped.map((s) => s.name)).toEqual(['broken.zip'])
   })
 })

@@ -74,22 +74,49 @@ describe('the reserved state folder', () => {
 })
 
 describe('reading and listing', () => {
-  it('builds a tree of folders then notes, skipping dotfiles and other files', async () => {
+  it('builds a tree of folders, then notes and files by name, skipping dotfiles and clutter', async () => {
     await write('b.md', 'b')
     await write('A.md', 'a')
-    await write('notes.txt', 'ignored')
+    await write('notes.txt', 'plain text')
+    await write('Report.PDF', '%PDF-1.7')
+    await write('Thumbs.db', 'clutter')
     await write('.trash/old.md', 'hidden')
     await write('Zeta/z.md', 'z')
     await write('Alpha/Inner/deep.md', 'deep')
 
     const tree = await lib.tree('')
-    expect(tree.map((n) => n.id)).toEqual(['Alpha', 'Zeta', 'A.md', 'b.md'])
+    // Notes sort by title and files by name, together, as the tree shows them.
+    expect(tree.map((n) => n.id)).toEqual(['Alpha', 'Zeta', 'A.md', 'b.md', 'notes.txt', 'Report.PDF'])
     expect(tree[0].children[0].children[0]).toMatchObject({
       kind: 'file',
       id: 'Alpha/Inner/deep.md',
       title: 'deep',
     })
+    // Anything that isn't a note is an asset, with what the tree needs to draw it.
+    expect(tree.find((n) => n.id === 'Report.PDF')).toMatchObject({
+      kind: 'asset',
+      name: 'Report.PDF',
+      ext: 'pdf',
+      size: 8,
+    })
     expect(await lib.tree('does-not-exist')).toEqual([])
+  })
+
+  it('renames within the library without replacing anything', async () => {
+    await write('a.bin', 'bytes')
+    await write('taken.bin', 'mine')
+    await lib.rename('a.bin', 'Deep/Down/b.bin')
+    expect(await fs.readFile(path.join(root, 'Deep/Down/b.bin'), 'utf8')).toBe('bytes')
+    await expect(lib.rename('Deep/Down/b.bin', 'taken.bin')).rejects.toMatchObject({ code: 'EEXIST' })
+    expect(await fs.readFile(path.join(root, 'taken.bin'), 'utf8')).toBe('mine')
+    await expect(lib.rename('taken.bin', '../escape.bin')).rejects.toThrow(BadPathError)
+  })
+
+  it('appends, creating the file and its folders', async () => {
+    await lib.appendText('.deckle/log.jsonl', 'one\n')
+    const { size } = await lib.appendText('.deckle/log.jsonl', 'two\n')
+    expect(size).toBe(8)
+    expect(await lib.readText('.deckle/log.jsonl')).toBe('one\ntwo\n')
   })
 
   it('lists dotfiles too, with sizes', async () => {

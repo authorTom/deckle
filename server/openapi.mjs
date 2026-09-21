@@ -59,13 +59,21 @@ export function buildOpenApi(libraryName) {
       version: VERSION,
       summary: 'Read and write a Deckle knowledge base over HTTP.',
       description:
-        'Deckle stores a knowledge base as plain Markdown files in folders, plus a task planner ' +
-        'and bookmark collections. This API exposes all of it: search and read notes, create ' +
-        'and edit them, move them between folders, manage tasks and bookmarks, browse version ' +
-        'history and the recycle bin, and export the whole thing as a ZIP.\n\n' +
-        'Deleting a note moves it to the recycle bin rather than erasing it, and overwriting a ' +
-        'note snapshots the version it replaces into version history — so edits made through ' +
-        'this API are as recoverable as edits made in the app.\n\n' +
+        'Deckle is a knowledge base for agentic work: plain Markdown notes and ordinary files ' +
+        '(PDFs, spreadsheets, images, documents, code) in folders, plus a task planner and ' +
+        'bookmark collections. This API exposes all of it: search notes and documents, read ' +
+        'and write notes, store and fetch files of any type, move things between folders, ' +
+        'review the activity log, manage tasks and bookmarks, browse version history and the ' +
+        'recycle bin, and export the whole thing as a ZIP.\n\n' +
+        'Work usually lives in projects — folders inside `Projects/` with an `Overview.md` ' +
+        '(front matter: status, summary, tags) and a `Log.md`. Agents that speak MCP get ' +
+        'project tools for these at `/api/v1/mcp`; over REST they are ordinary folders and ' +
+        'notes.\n\n' +
+        'Deleting moves a note or file to the recycle bin rather than erasing it; overwriting ' +
+        'a note snapshots the version it replaces into version history, and replacing any ' +
+        'other file moves the old copy to the recycle bin — so changes made through this API ' +
+        'are as recoverable as changes made in the app. Every write is recorded in the ' +
+        'activity log under the name of the token that made it.\n\n' +
         'Authenticate every request with `Authorization: Bearer <token>`. Tokens are ' +
         'configured server-side and may be read-only, in which case any write returns 403.',
       license: { name: 'MIT' },
@@ -74,7 +82,10 @@ export function buildOpenApi(libraryName) {
     security: [{ bearerAuth: [] }],
     tags: [
       { name: 'notes', description: 'Markdown notes — the knowledge base itself.' },
-      { name: 'search', description: 'Find notes by meaning of the words they contain.' },
+      { name: 'files', description: 'Files of any type: reports, spreadsheets, images, PDFs.' },
+      { name: 'search', description: 'Find notes and documents by the words they contain.' },
+      { name: 'activity', description: 'What agents and scripts changed, and when.' },
+      { name: 'mcp', description: 'The same library as a Model Context Protocol server.' },
       { name: 'folders', description: 'The folder tree notes are organised into.' },
       { name: 'transfer', description: 'Bulk import and whole-library export.' },
       { name: 'tasks', description: 'The task planner and its projects.' },
@@ -265,12 +276,15 @@ export function buildOpenApi(libraryName) {
         get: withErrors({
           tags: ['search'],
           operationId: 'searchNotes',
-          summary: 'Find the notes most relevant to a query.',
+          summary: 'Find the notes and files most relevant to a query.',
           description:
-            'BM25 ranking over note titles, paths and content, with titles weighted heavily. ' +
-            'Returns the best matches with a snippet around the match — read the full note with ' +
-            'GET /notes/{path} once you know which one you want. This is the right first call ' +
-            'for answering a question from the knowledge base.',
+            'BM25 ranking over notes (title, path and content) and other files (name, path, and ' +
+            'the text inside Word, Excel, PowerPoint, OpenDocument, CSV, JSON, text and code ' +
+            'files), with names weighted heavily. PDFs and images are matched by name only. ' +
+            'Returns the best matches with a snippet around the match — read a note with ' +
+            'GET /notes/{path} or fetch a file with GET /files/{path} once you know which one ' +
+            'you want. This is the right first call for answering a question from the ' +
+            'knowledge base.',
           parameters: [
             {
               name: 'q',
@@ -290,6 +304,12 @@ export function buildOpenApi(libraryName) {
               schema: { type: 'string' },
               description: 'Restrict the search to one folder and its subfolders.',
             },
+            {
+              name: 'kind',
+              in: 'query',
+              schema: { type: 'string', enum: ['note', 'file'] },
+              description: 'Only notes, or only other files.',
+            },
           ],
           responses: {
             200: jsonResponse('Ranked results, best first.', {
@@ -308,7 +328,7 @@ export function buildOpenApi(libraryName) {
         get: withErrors({
           tags: ['folders'],
           operationId: 'getTree',
-          summary: 'Get the folder and note tree.',
+          summary: 'Get the folder tree, with its notes and files.',
           parameters: [
             {
               name: 'path',
@@ -350,17 +370,195 @@ export function buildOpenApi(libraryName) {
         delete: withErrors({
           tags: ['folders'],
           operationId: 'deleteFolder',
-          summary: 'Delete a folder, sending every note inside it to the recycle bin.',
+          summary: 'Delete a folder, sending every note and file inside it to the recycle bin.',
           responses: {
             200: jsonResponse('Deletion result.', {
               type: 'object',
               properties: {
                 deleted: { type: 'string' },
-                trashed: { type: 'integer', description: 'Notes moved to the recycle bin.' },
+                trashed: { type: 'integer', description: 'Notes and files moved to the recycle bin.' },
               },
             }),
           },
         }),
+      },
+
+      '/files': {
+        get: withErrors({
+          tags: ['files'],
+          operationId: 'listFiles',
+          summary: 'List notes and files, most recently changed first.',
+          description:
+            'Every note and file under a folder, with type, size and modification time. ' +
+            'Use `kind=file` for just the non-note files an agent has stored.',
+          parameters: [
+            { name: 'folder', in: 'query', schema: { type: 'string' }, description: 'Omit for the whole library.' },
+            {
+              name: 'recursive',
+              in: 'query',
+              schema: { type: 'boolean', default: true },
+              description: 'false lists only the folder itself, not its subfolders.',
+            },
+            { name: 'kind', in: 'query', schema: { type: 'string', enum: ['note', 'file'] } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 200, minimum: 1, maximum: 2000 } },
+            { name: 'offset', in: 'query', schema: { type: 'integer', default: 0, minimum: 0 } },
+          ],
+          responses: {
+            200: jsonResponse('A page of files.', {
+              type: 'object',
+              properties: {
+                total: { type: 'integer' },
+                limit: { type: 'integer' },
+                offset: { type: 'integer' },
+                files: { type: 'array', items: ref('FileInfo') },
+              },
+            }),
+          },
+        }),
+      },
+
+      '/files/{path}': {
+        parameters: [
+          {
+            name: 'path',
+            in: 'path',
+            required: true,
+            schema: { type: 'string' },
+            description:
+              'File path relative to the library root, e.g. "Projects/Acme/Q3 report.pdf". ' +
+              'Percent-encode each segment. Hidden (dot) folders are rejected.',
+          },
+        ],
+        get: withErrors({
+          tags: ['files'],
+          operationId: 'getFile',
+          summary: 'Download a file (or its details, with meta=true).',
+          parameters: [
+            {
+              name: 'meta',
+              in: 'query',
+              schema: { type: 'boolean' },
+              description: 'Return the file\'s details as JSON instead of its bytes.',
+            },
+          ],
+          responses: {
+            200: {
+              description: 'The file, as an attachment — or its details, with meta=true.',
+              content: {
+                'application/octet-stream': { schema: { type: 'string', format: 'binary' } },
+                'application/json': { schema: ref('FileInfo') },
+              },
+            },
+          },
+        }),
+        put: withErrors(
+          {
+            tags: ['files'],
+            operationId: 'putFile',
+            summary: 'Store a file of any type from the raw request body.',
+            description:
+              'Send the file\'s bytes as the body (curl: `--data-binary @report.pdf` or ' +
+              '`-T report.pdf`). Parent folders are created. A file already at the path is ' +
+              'replaced only once the upload has fully arrived, and the old copy moves to the ' +
+              'recycle bin; a `.md` path is written as a note instead, with the old version kept ' +
+              'in its history. Files are limited to DECKLE_MAX_FILE_MB (100 MB by default).',
+            parameters: [
+              {
+                name: 'overwrite',
+                in: 'query',
+                schema: { type: 'boolean', default: true },
+                description: 'false answers 409 rather than replace an existing file.',
+              },
+              {
+                name: 'message',
+                in: 'query',
+                schema: { type: 'string' },
+                description: 'One line on what this is, shown in the activity log. Also accepted as an X-Deckle-Message header.',
+              },
+            ],
+            requestBody: {
+              required: true,
+              content: { 'application/octet-stream': { schema: { type: 'string', format: 'binary' } } },
+            },
+            responses: {
+              200: jsonResponse('Replaced an existing file.', ref('FileInfo')),
+              201: jsonResponse('Created a new file.', ref('FileInfo')),
+            },
+          },
+          { 413: jsonResponse('Larger than DECKLE_MAX_FILE_MB.', ref('Error')) },
+        ),
+        delete: withErrors({
+          tags: ['files'],
+          operationId: 'deleteFile',
+          summary: 'Move a file to the recycle bin.',
+          parameters: [
+            { name: 'permanent', in: 'query', schema: { type: 'boolean' }, description: 'Erase instead.' },
+          ],
+          responses: {
+            200: jsonResponse('Deletion result.', {
+              type: 'object',
+              properties: {
+                deleted: { type: 'string' },
+                permanent: { type: 'boolean' },
+                trash: ref('TrashItem'),
+              },
+            }),
+          },
+        }),
+      },
+
+      '/activity': {
+        get: withErrors({
+          tags: ['activity'],
+          operationId: 'listActivity',
+          summary: 'What was created, changed, moved or deleted through the API and MCP.',
+          description:
+            'Newest first. Every write made with a token is recorded under the token\'s name; ' +
+            'changes made in the app itself are not. Use `since` with the `at` of the last ' +
+            'event you saw to fetch only what is new.',
+          parameters: [
+            {
+              name: 'since',
+              in: 'query',
+              schema: { type: 'string' },
+              description: 'Unix milliseconds, or an ISO date — only later events.',
+            },
+            { name: 'project', in: 'query', schema: { type: 'string' } },
+            { name: 'actor', in: 'query', schema: { type: 'string' }, description: 'A token name.' },
+            { name: 'path', in: 'query', schema: { type: 'string' }, description: 'A file, or a folder and everything in it.' },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 100, minimum: 1, maximum: 1000 } },
+          ],
+          responses: {
+            200: jsonResponse('Events, newest first.', {
+              type: 'object',
+              properties: {
+                count: { type: 'integer' },
+                events: { type: 'array', items: ref('ActivityEvent') },
+              },
+            }),
+          },
+        }),
+      },
+
+      '/mcp': {
+        post: {
+          tags: ['mcp'],
+          operationId: 'mcp',
+          summary: 'The Model Context Protocol endpoint (Streamable HTTP, stateless).',
+          description:
+            'Point an MCP client at this URL with the same bearer token. It answers JSON-RPC ' +
+            'POSTs with JSON (no event stream, no session id), and offers the tools search, ' +
+            'read, list, list_projects and recent_activity — plus, for a read-write token, ' +
+            'write_note, save_file, create_project, update_project, log_progress, move and ' +
+            'delete. Requests carrying an Origin header must come from DECKLE_API_CORS_ORIGINS.',
+          requestBody: jsonBody({ type: 'object', description: 'A JSON-RPC 2.0 message, or a batch of them.' }),
+          responses: {
+            200: jsonResponse('A JSON-RPC response (or a batch of them).', { type: 'object' }),
+            202: { description: 'The message was a notification; there is nothing to answer.' },
+            401: ERRORS[401],
+            403: jsonResponse('An Origin that is not allowed.', ref('Error')),
+          },
+        },
       },
 
       '/import': {
@@ -729,7 +927,7 @@ export function buildOpenApi(libraryName) {
         get: withErrors({
           tags: ['trash'],
           operationId: 'listTrash',
-          summary: 'List notes in the recycle bin.',
+          summary: 'List notes and files in the recycle bin.',
           responses: {
             200: jsonResponse('Recycle bin contents, newest first.', {
               type: 'object',
@@ -766,8 +964,13 @@ export function buildOpenApi(libraryName) {
         post: withErrors({
           tags: ['trash'],
           operationId: 'restoreTrashItem',
-          summary: 'Restore a note from the recycle bin to where it was deleted from.',
-          responses: { 200: jsonResponse('The restored note.', ref('Note')) },
+          summary: 'Restore a note or file from the recycle bin to where it was deleted from.',
+          description: 'If something now occupies that path, the item comes back under a numbered name.',
+          responses: {
+            200: jsonResponse('The restored note, or the restored file\'s details.', {
+              oneOf: [ref('Note'), ref('FileInfo')],
+            }),
+          },
         }),
       },
     },
@@ -810,22 +1013,59 @@ export function buildOpenApi(libraryName) {
           type: 'object',
           properties: {
             path: { type: 'string' },
-            title: { type: 'string' },
+            title: { type: 'string', description: 'A note\'s title, or a file\'s name.' },
             folder: { type: 'string' },
+            kind: { type: 'string', enum: ['note', 'file'] },
             score: { type: 'number', description: 'BM25 relevance; higher is better.' },
-            snippet: { type: 'string', description: 'Text around the best match.' },
+            snippet: {
+              type: 'string',
+              description: 'Text around the best match; empty for a file matched only by name.',
+            },
+            size: { type: 'integer', description: 'Files only.' },
             updatedAt: { type: 'integer' },
+          },
+        },
+        FileInfo: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', example: 'Projects/Acme/Q3 report.pdf' },
+            name: { type: 'string', example: 'Q3 report.pdf' },
+            folder: { type: 'string', example: 'Projects/Acme' },
+            kind: { type: 'string', enum: ['note', 'file'] },
+            ext: { type: 'string', example: 'pdf' },
+            size: { type: 'integer', description: 'Bytes.' },
+            updatedAt: { type: 'integer', description: 'Unix milliseconds.' },
+          },
+        },
+        ActivityEvent: {
+          type: 'object',
+          properties: {
+            at: { type: 'integer', description: 'Unix milliseconds.' },
+            actor: { type: 'string', description: 'The name of the token that made the change.' },
+            via: { type: 'string', enum: ['api', 'mcp'] },
+            action: { type: 'string', example: 'saved' },
+            kind: { type: 'string', enum: ['note', 'file', 'folder', 'project', 'task', 'bookmark'] },
+            path: { type: 'string' },
+            to: { type: 'string', description: 'Moves only: where it went.' },
+            project: { type: 'string', description: 'The project folder the change was in, if any.' },
+            size: { type: 'integer' },
+            count: { type: 'integer', description: 'Bulk changes: how many items.' },
+            message: { type: 'string', description: 'What the agent said about it.' },
           },
         },
         TreeNode: {
           type: 'object',
-          description: 'A folder (with children) or a note.',
+          description:
+            'A folder (with children), a note (kind "file", a .md file), or any other file ' +
+            '(kind "asset" — a PDF, image, spreadsheet…).',
           properties: {
-            kind: { type: 'string', enum: ['folder', 'file'] },
+            kind: { type: 'string', enum: ['folder', 'file', 'asset'] },
             id: { type: 'string', description: 'Library-relative path.' },
             name: { type: 'string' },
-            title: { type: 'string', description: 'Files only: the name without ".md".' },
-            updatedAt: { type: 'integer', description: 'Files only.' },
+            title: { type: 'string', description: 'A note\'s name without ".md"; a file\'s full name.' },
+            ext: { type: 'string', description: 'Assets only: the lower-case extension.' },
+            size: { type: 'integer', description: 'Assets only: bytes.' },
+            updatedAt: { type: 'integer', description: 'Notes and assets.' },
             children: {
               type: 'array',
               description: 'Folders only.',
@@ -922,7 +1162,7 @@ export function buildOpenApi(libraryName) {
             snapName: { type: 'string', description: 'Identifier for /history/{snapshot}.' },
             noteId: { type: 'string', description: 'The note this version belongs to.' },
             savedAt: { type: 'integer' },
-            reason: { type: 'string', enum: ['edit', 'ai', 'restore'] },
+            reason: { type: 'string', enum: ['edit', 'agent', 'ai', 'restore'] },
           },
         },
         TrashItem: {
@@ -930,8 +1170,15 @@ export function buildOpenApi(libraryName) {
           properties: {
             trashName: { type: 'string', description: 'Identifier for /trash/{trashName}.' },
             originalPath: { type: 'string' },
-            title: { type: 'string' },
+            title: { type: 'string', description: 'A note\'s title, or a file\'s name.' },
             deletedAt: { type: 'integer' },
+            kind: { type: 'string', enum: ['file'], description: 'Present for non-note files.' },
+            reason: {
+              type: 'string',
+              enum: ['replaced'],
+              description: 'Present when a newer version took this one\'s place.',
+            },
+            by: { type: 'string', description: 'The token that deleted or replaced it.' },
           },
         },
       },

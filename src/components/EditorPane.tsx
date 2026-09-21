@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   useEditor,
   EditorContent,
@@ -13,16 +13,16 @@ import TaskItem from '@tiptap/extension-task-item'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import { createLowlight, common } from 'lowlight'
 import { Markdown } from 'tiptap-markdown'
-import { BookmarkPlus, Brain, SquareCheckBig, X } from 'lucide-react'
-import InlineAssistant, { type InlineAsk } from './InlineAssistant'
-import InlineApproval from './InlineApproval'
-import SlashCommands from './SlashCommands'
+import { BookmarkPlus, SquareCheckBig, X } from 'lucide-react'
 import WikilinkSuggest from './WikilinkSuggest'
 import Outline from './Outline'
 import Backlinks from './Backlinks'
+import NoteProperties from './NoteProperties'
 import { formatActions, listActions, type FormatAction } from './formatActions'
 import { Wikilink } from '../editor/wikilink'
+import { LibraryImage, libraryPathFor } from '../editor/image'
 import { serialize } from '../editor/markdown'
+import { joinFrontmatter, splitFrontmatter } from '../lib/frontmatter'
 import {
   MarkdownTable,
   MarkdownTableCell,
@@ -35,16 +35,20 @@ import {
   type EnterFrom,
   type FlightOrigin,
 } from '../lib/motion'
-import type { NoteFile } from '../fs/library'
-import type { PendingAction } from '../ai/useAssistant'
+import type { LibraryFile } from '../fs/library'
 
 const lowlight = createLowlight(common)
 
 interface EditorPaneProps {
   noteId: string
   content: string
-  /** Every note in the library — wikilink resolution and the `[[` picker need it. */
-  notes: NoteFile[]
+  /**
+   * Every note and file in the library — wikilink resolution and the `[[`
+   * picker need it, and a link may point at a PDF as readily as a note.
+   */
+  notes: LibraryFile[]
+  /** Read a file from the library, for images the note embeds. */
+  loadFile: (path: string) => Promise<Blob | null>
   backlinks: Backlink[]
   /** True when this pane owns the toolbar and the topbar title. */
   focused: boolean
@@ -60,15 +64,6 @@ interface EditorPaneProps {
   onFocusPane: () => void
   onContentChange: (noteId: string, markdown: string) => void
   onOpenNote: (noteId: string) => void
-  onInlineAsk: InlineAsk
-  /**
-   * A change the assistant wants to make to *this* note, waiting on a person.
-   * Rendered at the caret rather than in the chat sheet — see InlineApproval.
-   */
-  approval?: PendingAction | null
-  onApproveAction?: (id: string) => void
-  onRejectAction?: (id: string) => void
-  onOpenAssistant?: () => void
   onAddTask: (text: string) => void
   onAddBookmark: () => void
   onEditorReady: (editor: TiptapEditor | null) => void
@@ -93,6 +88,7 @@ export default function EditorPane({
   noteId,
   content,
   notes,
+  loadFile,
   backlinks,
   focused,
   isNew = false,
@@ -103,27 +99,12 @@ export default function EditorPane({
   onFocusPane,
   onContentChange,
   onOpenNote,
-  onInlineAsk,
-  approval,
-  onApproveAction,
-  onRejectAction,
-  onOpenAssistant,
   onAddTask,
   onAddBookmark,
   onEditorReady,
   onLeaveNote,
   shouldClaimFocus,
 }: EditorPaneProps) {
-  const [aiOpen, setAiOpen] = useState(false)
-  const [aiRange, setAiRange] = useState<{
-    from: number
-    to: number
-    text: string
-  } | null>(null)
-  // Read inside the bubble-menu shouldShow (which may capture a stale closure).
-  const aiOpenRef = useRef(false)
-  aiOpenRef.current = aiOpen
-
   // The wikilink extension is built once, but resolution has to see the current
   // note list — so it reads through refs rather than being rebuilt per render.
   const notesRef = useRef(notes)
@@ -132,6 +113,41 @@ export default function EditorPane({
   noteIdRef.current = noteId
   const onOpenNoteRef = useRef(onOpenNote)
   onOpenNoteRef.current = onOpenNote
+
+  // Images the note embeds from the library are shown from blob URLs, which
+  // are this pane's to free when it goes.
+  const loadFileRef = useRef(loadFile)
+  loadFileRef.current = loadFile
+  const imageUrls = useRef<string[]>([])
+  useEffect(
+    () => () => {
+      for (const url of imageUrls.current) URL.revokeObjectURL(url)
+    },
+    [],
+  )
+  const resolveImage = useCallback(async (src: string) => {
+    const path = libraryPathFor(src, noteIdRef.current)
+    if (!path) return null
+    const blob = await loadFileRef.current(path)
+    if (!blob) return null
+    const url = URL.createObjectURL(blob)
+    imageUrls.current.push(url)
+    return url
+  }, [])
+
+  // Front matter never reaches ProseMirror, which would read the fence as a
+  // rule and a heading and write that back. It is held here, shown above the
+  // text, and put back on top of whatever the editor serialises.
+  const { frontmatter: loadedFrontmatter, body } = useMemo(
+    () => splitFrontmatter(content),
+    [content],
+  )
+  const [frontmatter, setFrontmatter] = useState(loadedFrontmatter)
+  const frontmatterRef = useRef(loadedFrontmatter)
+  useEffect(() => {
+    frontmatterRef.current = loadedFrontmatter
+    setFrontmatter(loadedFrontmatter)
+  }, [loadedFrontmatter])
 
   const extensions = useMemo(
     () => [
@@ -146,6 +162,7 @@ export default function EditorPane({
       MarkdownTableHeader,
       MarkdownTableCell,
       CodeBlockLowlight.configure({ lowlight }),
+      LibraryImage.configure({ resolve: resolveImage }),
       Wikilink.configure({
         resolve: (target) =>
           resolveWikilink(target, notesRef.current, noteIdRef.current),
@@ -159,7 +176,7 @@ export default function EditorPane({
     extensions,
     content: '',
     onUpdate: ({ editor }) => {
-      onContentChange(noteId, serialize(editor))
+      onContentChange(noteId, joinFrontmatter(frontmatterRef.current, serialize(editor)))
     },
     onFocus: onFocusPane,
     // Leaving the note is the safe moment to let it take its name from its own
@@ -168,17 +185,25 @@ export default function EditorPane({
     onBlur: ({ editor }) => onLeaveNote?.(noteId, serialize(editor)),
   })
 
+  /** New properties from the strip: saved with the text as it stands. */
+  const changeFrontmatter = (next: string) => {
+    frontmatterRef.current = next
+    setFrontmatter(next)
+    if (editor) onContentChange(noteId, joinFrontmatter(next, serialize(editor)))
+  }
+
   // Load the note's markdown into the editor when it's ready, and re-sync if the
-  // content changes underneath us — e.g. the AI assistant edits the open note.
+  // content changes underneath us — e.g. an agent rewrites the open note.
   // `content` only changes on a fresh load from disk (typing doesn't update it),
   // so this won't fire on the user's own keystrokes. The guard avoids resetting
   // the cursor when the incoming text already matches what's in the editor.
   useEffect(() => {
     if (!editor) return
-    if (content === serialize(editor)) return
-    editor.commands.setContent(content, false)
+    const text = body.replace(/^\s*\n/, '')
+    if (text === serialize(editor)) return
+    editor.commands.setContent(text, false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editor, content])
+  }, [editor, body])
 
   // Take the caret as soon as the content is in, so the first keystroke after
   // opening or creating a note lands in the document. Without this the ink
@@ -244,42 +269,11 @@ export default function EditorPane({
     return () => onEditorReady(null)
   }, [editor, onEditorReady])
 
-  // ---- Inline "Ask AI" on a selection ----
-  const openInlineAi = () => {
-    if (!editor) return
-    const { from, to } = editor.state.selection
-    if (from === to) return
-    setAiRange({ from, to, text: editor.state.doc.textBetween(from, to, '\n') })
-    setAiOpen(true)
-  }
-
   const addSelectionTask = () => {
     if (!editor) return
     const { from, to } = editor.state.selection
     if (from === to) return
     onAddTask(editor.state.doc.textBetween(from, to, ' '))
-  }
-
-  /** Follow a citation the assistant wrote, if the library has that note. */
-  const openWikilink = (target: string) => {
-    const id = resolveWikilink(target, notesRef.current, noteIdRef.current)
-    if (id) onOpenNoteRef.current(id)
-  }
-
-  const replaceSelection = (text: string) => {
-    if (!editor || !aiRange) return
-    editor
-      .chain()
-      .focus()
-      .insertContentAt({ from: aiRange.from, to: aiRange.to }, text)
-      .run()
-    setAiOpen(false)
-  }
-
-  const insertBelowSelection = (text: string) => {
-    if (!editor || !aiRange) return
-    editor.chain().focus().insertContentAt(aiRange.to, `\n\n${text}`).run()
-    setAiOpen(false)
   }
 
   return (
@@ -333,20 +327,10 @@ export default function EditorPane({
             <BubbleMenu
               editor={editor}
               tippyOptions={{ duration: 100, interactive: true, maxWidth: 'none' }}
-              shouldShow={({ state }) => aiOpenRef.current || !state.selection.empty}
-              className={`bubble-menu${aiOpen ? ' ai' : ''}`}
+              shouldShow={({ state }) => !state.selection.empty}
+              className="bubble-menu"
             >
-              {aiOpen && aiRange ? (
-                <InlineAssistant
-                  selectedText={aiRange.text}
-                  ask={onInlineAsk}
-                  onReplace={replaceSelection}
-                  onInsertBelow={insertBelowSelection}
-                  onOpenLink={openWikilink}
-                  onClose={() => setAiOpen(false)}
-                />
-              ) : (
-                <>
+              <>
                   <button
                     type="button"
                     className="toolbar-btn"
@@ -365,15 +349,6 @@ export default function EditorPane({
                   >
                     <BookmarkPlus size={16} />
                   </button>
-                  <button
-                    type="button"
-                    className="toolbar-btn ai-trigger"
-                    title="Ask AI about selection"
-                    aria-label="Ask AI about selection"
-                    onClick={openInlineAi}
-                  >
-                    <Brain size={16} />
-                  </button>
                   <span className="toolbar-divider" />
                   {[...formatActions, ...listActions].map((action: FormatAction) => {
                     const { Icon, label, run, isActive } = action
@@ -390,10 +365,11 @@ export default function EditorPane({
                       </button>
                     )
                   })}
-                </>
-              )}
+              </>
             </BubbleMenu>
           )}
+
+          <NoteProperties frontmatter={frontmatter} onChange={changeFrontmatter} />
 
           <EditorContent editor={editor} />
 
@@ -404,17 +380,6 @@ export default function EditorPane({
       </div>
 
       <WikilinkSuggest editor={editor} notes={notes} noteId={noteId} />
-      <SlashCommands editor={editor} ask={onInlineAsk} />
-
-      {approval && onApproveAction && onRejectAction && onOpenAssistant && (
-        <InlineApproval
-          editor={editor}
-          action={approval}
-          onApprove={onApproveAction}
-          onReject={onRejectAction}
-          onOpenChat={onOpenAssistant}
-        />
-      )}
     </div>
   )
 }

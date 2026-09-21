@@ -11,8 +11,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.32.1",
     "@tiptap/extension-code-block-lowlight": "^2.27.2",
+    "@tiptap/extension-image": "^2.27.3",
     "@tiptap/extension-link": "^2.27.2",
     "@tiptap/extension-placeholder": "^2.11.5",
     "@tiptap/extension-table": "^2.27.2",
@@ -34,6 +34,7 @@
   "devDependencies": {
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
+    "@types/node": "^22.20.4",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",

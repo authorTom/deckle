@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  Activity,
   Bookmark,
-  Bot,
-  Brain,
   Columns2,
   FileDown,
   FolderInput,
+  FolderKanban,
   FolderOpen,
   FolderPlus,
   History,
@@ -18,7 +18,6 @@ import {
   Palette,
   Plus,
   Server,
-  Sparkles,
   Sun,
   Trash2,
   Keyboard,
@@ -36,17 +35,22 @@ import ConfirmDialog, { type ConfirmRequest } from './components/ConfirmDialog'
 import ThemePicker from './components/ThemePicker'
 import ResizeCrew from './components/ResizeCrew'
 import { EASTER_EGG_KEYWORDS } from './themes/themes'
-import AssistantPanel from './components/AssistantPanel'
 import TaskPanel, { type PanelTab } from './components/TaskPanel'
+import ProjectsView from './components/ProjectsView'
+import ActivityView from './components/ActivityView'
+import { useActivity } from './activity/useActivity'
+import { lastEventFor } from './activity/activity'
+import { useProjects } from './projects/useProjects'
+import {
+  DEFAULT_PROJECTS_DIR,
+  createProject,
+  setProjectStatus,
+  type Project,
+} from './projects/projects'
 import LibraryGate from './components/LibraryGate'
 import InkFilter from './components/InkFilter'
 import ShortcutsModal from './components/ShortcutsModal'
 import AboutModal, { type StorageKind } from './components/AboutModal'
-import MemoryModal from './components/MemoryModal'
-import RunModal from './components/RunModal'
-import { useQueue } from './queue/useQueue'
-import { useAssistant } from './ai/useAssistant'
-import type { Sharing } from './ai/remoteSettings'
 import { useTasks } from './tasks/useTasks'
 import { useBookmarks } from './bookmarks/useBookmarks'
 import { domainOf, findUrl, normalizeUrl } from './bookmarks/url'
@@ -62,7 +66,6 @@ import { exportToPdf } from './lib/exportPdf'
 import { downloadMarkdown } from './lib/exportMarkdown'
 import { serialize } from './editor/markdown'
 import {
-  IMPORT_ACCEPT,
   selectionFromDataTransfer,
   selectionFromFiles,
   type ImportSelection,
@@ -75,6 +78,8 @@ import ImportModal, {
 } from './components/ImportModal'
 import MoveNoteModal from './components/MoveNoteModal'
 import { useTheme } from './hooks/useTheme'
+import { downloadBlob } from './lib/zip'
+import { readNote as readNoteFromLibrary } from './fs/library'
 import { useNotes } from './hooks/useNotes'
 import type { EnterFrom, FlightOrigin } from './lib/motion'
 import { useBacklinks } from './hooks/useBacklinks'
@@ -118,9 +123,13 @@ export default function App() {
     reload,
     tree,
     notes,
+    allFiles,
     activeNote,
+    activeAsset,
     activeId,
     activeContent,
+    readFile,
+    flush,
     openNotes,
     openNote,
     openNoteInPane,
@@ -129,6 +138,7 @@ export default function App() {
     moveTab,
     splitId,
     splitNote,
+    splitAsset,
     splitContent,
     setSplitId,
     toggleSplit,
@@ -203,11 +213,6 @@ export default function App() {
   const [themePickerOpen, setThemePickerOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
-  const [memoryOpen, setMemoryOpen] = useState(false)
-  // Bumped whenever the assistant writes to its memory, so an open panel
-  // refetches rather than showing what it read a minute ago.
-  const [memoryRevision, setMemoryRevision] = useState(0)
-  const bumpMemory = useCallback(() => setMemoryRevision((n) => n + 1), [])
 
   /**
    * Which backend is holding the notes, for the About box to name.
@@ -222,26 +227,16 @@ export default function App() {
       ? 'disk'
       : 'browser'
 
-  // Tasks & bookmarks share a tabbed panel docked on the left (beside the
-  // note list); the assistant stays on the right.
-  const [assistantOpen, setAssistantOpen] = useState(false)
+  // Projects, activity, tasks and bookmarks share a tabbed panel docked on the
+  // left, beside the note list.
   const [tasksOpen, setTasksOpen] = useState(false)
-  const [panelTab, setPanelTab] = useState<PanelTab>('tasks')
-  // Which half of the assistant is showing. Held here so the command palette
-  // can open the panel *on* the queue rather than merely near it.
-  const [assistantView, setAssistantView] = useState<'chat' | 'queue'>('chat')
+  const [panelTab, setPanelTab] = useState<PanelTab>('projects')
 
   /** Shut every drawer — what the scrim does, and what a phone needs on open. */
   const closeOverlays = useCallback(() => {
     setSidebarOpen(false)
     setTasksOpen(false)
   }, [])
-
-  // Trevor is a sheet over the workspace rather than a drawer beside it, so he
-  // no longer has to shove the other panels out of the way to open — and he
-  // dismisses himself on Escape, from inside the panel.
-  const toggleAssistant = useCallback(() => setAssistantOpen((o) => !o), [])
-  const closeAssistant = useCallback(() => setAssistantOpen(false), [])
 
   /** Open the panel on a tab; clicking the active tab's button closes it. */
   const openPanelTab = useCallback(
@@ -250,10 +245,7 @@ export default function App() {
         setTasksOpen(false)
         return
       }
-      if (compact) {
-        setSidebarOpen(false)
-        setAssistantOpen(false)
-      }
+      if (compact) setSidebarOpen(false)
       setPanelTab(which)
       setTasksOpen(true)
     },
@@ -264,16 +256,8 @@ export default function App() {
     () => openPanelTab('bookmarks'),
     [openPanelTab],
   )
-  /**
-   * The queue is part of Trevor now, so "show me the queue" means "drop Trevor
-   * on it". Kept as its own command because that is what people search the
-   * palette for.
-   */
-  const openQueue = useCallback(() => {
-    setAssistantView('queue')
-    if (!assistantOpen) toggleAssistant()
-  }, [assistantOpen, toggleAssistant])
-
+  const toggleProjects = useCallback(() => openPanelTab('projects'), [openPanelTab])
+  const toggleActivity = useCallback(() => openPanelTab('activity'), [openPanelTab])
   // Docked panels stay mounted for the length of their slide-out, so closing
   // one animates instead of vanishing. Matches --dur-slow.
   const PANEL_EXIT_MS = 260
@@ -294,25 +278,25 @@ export default function App() {
     max: 560,
     edge: 'right',
   })
-  // Trevor drops from the top, so his handle measures height. A fresh storage
-  // key on purpose: the old one holds a width, which is meaningless here.
-  const assistantResize = useResizable({
-    storageKey: 'deckle-height-trevor',
-    defaultSize: 520,
-    min: 320,
-    max: 900,
-    edge: 'bottom',
-  })
-
   // Tasks (Todoist-style planner, stored in the library's .deckle/tasks.json)
   const tasks = useTasks(libraryDir)
 
   // Bookmarks (stored in the library's .deckle/bookmarks.json)
   const bookmarks = useBookmarks(libraryDir)
 
-  // Wikilink backlinks, one index per pane.
-  const backlinks = useBacklinks(libraryDir, notes, activeId)
-  const splitBacklinks = useBacklinks(libraryDir, notes, splitId)
+  // Wikilink backlinks, one index per pane — for a file as much as a note.
+  const backlinks = useBacklinks(libraryDir, allFiles, activeId)
+  const splitBacklinks = useBacklinks(libraryDir, allFiles, splitId)
+
+  // What agents are doing to the library. Polls the server library's activity
+  // log and reloads the tree and any open note when it moves, so a file an
+  // agent saves appears without anyone refreshing the page.
+  const activity = useActivity(libraryDir, libraryName, reload)
+
+  // Projects: the folders in Projects/ (or wherever the server was told).
+  const projectsDir =
+    (usingServerLibrary ? serverLibrary?.projectsDir : undefined) ?? DEFAULT_PROJECTS_DIR
+  const projects = useProjects(libraryDir, tree, projectsDir)
 
   // Transient confirmation toast (e.g. after capturing a task).
   const [toast, setToast] = useState<string | null>(null)
@@ -580,102 +564,14 @@ export default function App() {
     setImportSelection(null)
   }, [])
 
-  // AI assistant (right-side panel)
-  const getDir = useCallback(() => libraryDir, [libraryDir])
-  const onAssistantMutated = useCallback(() => void reload(), [reload])
-  const getActivePath = useCallback(() => activeNote?.id ?? null, [activeNote])
-
-  // The keystrokes that haven't reached the disk yet.
-  //
-  // `activeContent` is what was loaded from the file, and it doesn't change as
-  // the user types — so asking Trevor to "summarize this note" mid-paragraph
-  // used to hand him the version from before that paragraph existed. Only the
-  // note being typed in is held: anything else has been flushed already.
-  const liveEdit = useRef<{ id: string; text: string } | null>(null)
-  const handleContentChange = useCallback(
-    (id: string, markdown: string) => {
-      liveEdit.current = { id, text: markdown }
-      saveContent(id, markdown)
-    },
-    [saveContent],
-  )
-  const getActiveContent = useCallback(() => {
-    if (!activeNote) return null
-    const live = liveEdit.current
-    return live?.id === activeNote.id ? live.text : activeContent
-  }, [activeNote, activeContent])
-  // Where the assistant's settings live. On a server library they belong to the
-  // server, so every device that signs in is already configured — unless that
-  // server has no password, in which case it declines to hold a provider key
-  // and the panel says why.
-  const settingsSharing: Sharing = !usingServerLibrary
-    ? 'local'
-    : serverLibrary?.sharedSettings
-      ? 'server'
-      : 'needs-password'
-  // Live if there is nothing to authenticate against, or if we are authenticated.
-  // Goes false when a session expires under the user, which is the moment the
-  // key the server lent this browser stops being this browser's to keep.
-  const serverSession =
-    !usingServerLibrary || !serverLibrary?.authRequired || !!serverLibrary.authenticated
-  const assistant = useAssistant({
-    getDir,
-    onMutated: onAssistantMutated,
-    getActivePath,
-    getActiveContent,
-    onMemoryChanged: bumpMemory,
-    sharing: settingsSharing,
-    serverSession,
-  })
-
-  // Leaving the server library hands back what it lent: the session, and the
-  // assistant settings that came with it.
-  const forgetSharedSettings = assistant.forgetSharedSettings
-  const leaveServerLibrary = useCallback(() => {
-    forgetSharedSettings()
-    void signOutServer()
-  }, [forgetSharedSettings, signOutServer])
-
-  // A proposed edit to a note that is open gets decided at the text, not in a
-  // sheet dropped over it: the panel steps aside and InlineApproval takes the
-  // question to the caret. Only writes qualify — a folder or a delete has no
-  // place on the page to point at.
-  const inlineApproval = useMemo(() => {
-    const undecided = assistant.pending.filter((a) => a.status === 'pending')
-    // Only when it is the *only* thing being asked. A turn that also wants to
-    // delete a folder has a question this card cannot put at the caret, and
-    // stepping the panel aside would hide it with the loop still waiting on it.
-    if (undecided.length !== 1) return null
-    const [only] = undecided
-    const open = only.preview.path === activeNote?.id || only.preview.path === splitNote?.id
-    return only.preview.kind === 'write' && !!only.preview.path && open ? only : null
-  }, [assistant.pending, activeNote, splitNote])
-  useEffect(() => {
-    if (inlineApproval) setAssistantOpen(false)
-  }, [inlineApproval])
-
-  // The assistant's background queue. It executes here, in the browser, with
-  // the key already in this browser; the run records it writes are the contract
-  // a server-side worker will later read.
-  const [openRunId, setOpenRunId] = useState<string | null>(null)
-  const queue = useQueue({
-    dir: libraryDir,
-    settings: assistant.settings,
-    onMutated: onAssistantMutated,
-    onRunFailed: (title, error) => showToast(`“${title}” — ${error}`, 'danger'),
-  })
-
-  // Keyboard shortcuts: Ctrl/Cmd+K opens the palette, Ctrl/Cmd+J drops Trevor,
-  // Ctrl/Cmd+Shift+F toggles focus, Ctrl/Cmd+\ splits, Escape exits focus.
+  // Keyboard shortcuts: Ctrl/Cmd+K opens the palette, Ctrl/Cmd+Shift+F toggles
+  // focus, Ctrl/Cmd+\ splits, Escape exits focus.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey
       if (mod && e.key.toLowerCase() === 'k') {
         e.preventDefault()
         setPaletteOpen((o) => !o)
-      } else if (mod && !e.shiftKey && e.key.toLowerCase() === 'j') {
-        e.preventDefault()
-        toggleAssistant()
       } else if (mod && e.key === '\\') {
         e.preventDefault()
         toggleSplit()
@@ -702,10 +598,6 @@ export default function App() {
         // (The command palette and confirm dialog handle their own Escape.)
         if (historyOpen) setHistoryOpen(false)
         else if (trashOpen) setTrashOpen(false)
-        // Trevor hangs over everything below him, so he leaves before they do.
-        // The run and memory sheets he can open sit above him and swallow
-        // Escape themselves, so this never fires out from under one of them.
-        else if (assistantOpen) setAssistantOpen(false)
         // On a phone the drawers are the topmost layer, so they go before
         // focus mode does.
         else if (compact && (sidebarOpen || tasksOpen)) {
@@ -727,8 +619,6 @@ export default function App() {
     compact,
     sidebarOpen,
     tasksOpen,
-    assistantOpen,
-    toggleAssistant,
     closeOverlays,
   ])
 
@@ -766,10 +656,7 @@ export default function App() {
 
   const toggleSidebar = useCallback(() => {
     const opening = !sidebarOpen
-    if (opening && compact) {
-      setTasksOpen(false)
-      setAssistantOpen(false)
-    }
+    if (opening && compact) setTasksOpen(false)
     setSidebarOpen(opening)
   }, [sidebarOpen, compact])
 
@@ -809,8 +696,8 @@ export default function App() {
   // talking about a note that no longer exists.
   const [movingId, setMovingId] = useState<string | null>(null)
   const movingNote = useMemo(
-    () => notes.find((n) => n.id === movingId) ?? null,
-    [notes, movingId],
+    () => allFiles.find((n) => n.id === movingId) ?? null,
+    [allFiles, movingId],
   )
 
   /** Folder part of a note id — "Projects/idea.md" → "Projects". */
@@ -860,10 +747,102 @@ export default function App() {
     [renameNote],
   )
 
-  const handleSaveMarkdown = useCallback(() => {
-    if (!editor || !activeNote) return
-    downloadMarkdown(activeNote.title, serialize(editor))
-  }, [editor, activeNote])
+  // From the file, not the editor: the editor never holds a note's front
+  // matter, and a copy without it would not be the note.
+  const handleSaveMarkdown = useCallback(async () => {
+    if (!activeNote || !libraryDir) return
+    await flush()
+    try {
+      downloadMarkdown(activeNote.title, await readNoteFromLibrary(libraryDir, activeNote.id))
+    } catch {
+      if (editor) downloadMarkdown(activeNote.title, serialize(editor))
+    }
+  }, [editor, activeNote, libraryDir, flush])
+
+  const handleDownloadFile = useCallback(
+    async (id: string) => {
+      const file = allFiles.find((f) => f.id === id)
+      if (!file) return
+      try {
+        downloadBlob(await readFile(id), file.name)
+      } catch {
+        showToast(`Couldn't read ${file.name}`, 'danger')
+      }
+    },
+    [allFiles, readFile, showToast],
+  )
+
+  // ---- Projects and activity ----
+  const folderIds = useMemo(() => {
+    const out = new Set<string>()
+    const walk = (nodes: typeof tree) => {
+      for (const node of nodes) {
+        if (node.kind !== 'folder') continue
+        out.add(node.id)
+        walk(node.children)
+      }
+    }
+    walk(tree)
+    return out
+  }, [tree])
+  const kindAt = useCallback(
+    (path: string): 'file' | 'folder' | null =>
+      allFiles.some((f) => f.id === path) ? 'file' : folderIds.has(path) ? 'folder' : null,
+    [allFiles, folderIds],
+  )
+  const provenanceFor = useCallback(
+    (id: string) => lastEventFor(activity.events, id),
+    [activity.events],
+  )
+  /** Agent changes in each project since the person last looked. */
+  const unseenByProject = useMemo(() => {
+    const out = new Map<string, number>()
+    for (const event of activity.events) {
+      if (event.at <= activity.seenAt) break
+      if (event.project) out.set(event.project, (out.get(event.project) ?? 0) + 1)
+    }
+    return out
+  }, [activity.events, activity.seenAt])
+
+  /** A project opens on its overview, or on whatever changed in it last. */
+  const openProject = useCallback(
+    (project: Project) => {
+      const target = project.overview ?? project.latest
+      if (target) handleSelect(target)
+      else showToast(`${project.name} is empty`)
+    },
+    [handleSelect, showToast],
+  )
+  const openProjectByName = useCallback(
+    (name: string) => {
+      const project = projects.find((p) => p.name === name)
+      if (project) openProject(project)
+      else showToast(`There is no project called ${name} any more`)
+    },
+    [projects, openProject, showToast],
+  )
+  const handleSetProjectStatus = useCallback(
+    (project: Project, status: Parameters<typeof setProjectStatus>[2]) => {
+      if (!libraryDir) return
+      void setProjectStatus(libraryDir, project, status)
+        .then(() => reload())
+        .then(() => showToast(`${project.name} marked ${status}`))
+        .catch(() => showToast(`Couldn't update ${project.name}`, 'danger'))
+    },
+    [libraryDir, reload, showToast],
+  )
+  const handleCreateProject = useCallback(
+    (name: string, summary: string) => {
+      if (!libraryDir) return
+      void createProject(libraryDir, projectsDir, name, summary)
+        .then(async (overview) => {
+          await reload()
+          handleSelect(overview)
+        })
+        .catch(() => showToast(`Couldn't create ${name}`, 'danger'))
+    },
+    [libraryDir, projectsDir, reload, handleSelect, showToast],
+  )
 
   // ---- Command palette actions ----
   const commands = useMemo<Command[]>(() => {
@@ -931,14 +910,14 @@ export default function App() {
       },
       {
         id: 'import-md',
-        label: 'Import Markdown or a ZIP…',
+        label: 'Import files or a ZIP…',
         icon: Upload,
-        keywords: 'import upload md markdown zip archive add files migrate unzip',
+        keywords: 'import upload md markdown pdf image document spreadsheet zip archive add files migrate unzip',
         run: openImport,
       },
       {
         id: 'import-folder',
-        label: 'Import a folder of notes',
+        label: 'Import a folder',
         icon: FolderOpen,
         keywords: 'import upload folder directory bulk migrate restore',
         run: openFolderImport,
@@ -951,12 +930,18 @@ export default function App() {
         run: () => setExportOpen(true),
       },
       {
-        id: 'toggle-assistant',
-        label: 'Clever Trevor',
-        icon: Sparkles,
-        hint: 'Ctrl/Cmd+J',
-        keywords: 'ai assistant chat llm claude openai trevor clever ask',
-        run: toggleAssistant,
+        id: 'projects',
+        label: 'Projects',
+        icon: FolderKanban,
+        keywords: 'projects work agent hermes status overview folders',
+        run: toggleProjects,
+      },
+      {
+        id: 'activity',
+        label: 'Agent activity',
+        icon: Activity,
+        keywords: 'activity log agent hermes changes recent new review feed history api mcp',
+        run: toggleActivity,
       },
       {
         id: 'toggle-tasks',
@@ -980,20 +965,6 @@ export default function App() {
         hint: '?',
         keywords: 'keys keyboard shortcuts bindings help reference cheatsheet',
         run: () => setShortcutsOpen(true),
-      },
-      {
-        id: 'queue',
-        label: "Trevor's queue",
-        icon: Bot,
-        keywords: 'queue background job run agent task assistant trevor batch',
-        run: openQueue,
-      },
-      {
-        id: 'memory',
-        label: "Trevor's memory",
-        icon: Brain,
-        keywords: 'memory remember context assistant trevor learned facts forget',
-        run: () => setMemoryOpen(true),
       },
       {
         id: 'about',
@@ -1048,7 +1019,7 @@ export default function App() {
         icon: Server,
         keywords: 'server library docker remote sign out log out switch hosted',
         run: () =>
-          usingServerLibrary ? void leaveServerLibrary() : connectServer(),
+          usingServerLibrary ? void signOutServer() : connectServer(),
       })
     }
 
@@ -1136,10 +1107,10 @@ export default function App() {
     openImport,
     openFolderImport,
     openHistory,
-    toggleAssistant,
     toggleTasks,
     toggleBookmarks,
-    openQueue,
+    toggleProjects,
+    toggleActivity,
     captureSelectionBookmark,
     activeNote,
     handleDelete,
@@ -1147,7 +1118,7 @@ export default function App() {
     serverLibrary,
     usingServerLibrary,
     connectServer,
-    leaveServerLibrary,
+    signOutServer,
   ])
 
   // ---- Library gate: shown until a library is connected ----
@@ -1199,6 +1170,7 @@ export default function App() {
           onDelete={handleDelete}
           onSwitchLibrary={() => void connect()}
           onOpenTrash={() => void openTrash()}
+          onOpenProjects={toggleProjects}
           onOpenTasks={toggleTasks}
           onOpenBookmarks={toggleBookmarks}
           onOpenImport={openImport}
@@ -1221,6 +1193,29 @@ export default function App() {
           tasks={tasks}
           bookmarks={bookmarks}
           onOpenNote={handleSelect}
+          activityUnseen={activity.unseen}
+          projects={
+            <ProjectsView
+              projects={projects}
+              root={projectsDir}
+              unseenByProject={unseenByProject}
+              onOpen={openProject}
+              onOpenLog={(p) => p.log && handleSelect(p.log)}
+              onSetStatus={handleSetProjectStatus}
+              onCreate={handleCreateProject}
+            />
+          }
+          activity={
+            <ActivityView
+              events={activity.events}
+              supported={activity.supported}
+              seenAt={activity.seenAt}
+              onMarkSeen={activity.markSeen}
+              kindAt={kindAt}
+              onOpen={handleSelect}
+              onOpenProject={openProjectByName}
+            />
+          }
         />
         {tasksOpen && (
           <div {...taskResize.handleProps} aria-label="Resize tasks panel" />
@@ -1236,12 +1231,18 @@ export default function App() {
       />
 
       <Workspace
-        notes={notes}
+        notes={allFiles}
         openNotes={openNotes}
         activeNote={activeNote}
+        activeAsset={activeAsset}
         activeContent={activeContent}
         splitNote={splitNote}
+        splitAsset={splitAsset}
         splitContent={splitContent}
+        readFile={readFile}
+        provenanceFor={provenanceFor}
+        onDeleteFile={handleDelete}
+        onDownloadFile={(id) => void handleDownloadFile(id)}
         focusedPane={focusedPane}
         onFocusPane={setFocusedPane}
         backlinks={backlinks}
@@ -1250,7 +1251,7 @@ export default function App() {
         saveError={saveError}
         lastSavedAt={lastSavedAt}
         isDirty={(id) => dirtyIds.includes(id)}
-        libraryEmpty={notes.length === 0}
+        libraryEmpty={allFiles.length === 0}
         justCreatedId={justCreatedId}
         justPlacedId={justPlacedId}
         flightFrom={flightFrom}
@@ -1261,30 +1262,26 @@ export default function App() {
         onReorderTabs={moveTab}
         onToggleSplit={toggleSplit}
         onCloseSplit={() => setSplitId(null)}
-        onContentChange={handleContentChange}
+        onContentChange={saveContent}
         onLeaveNote={nameNoteAfterHeading}
         shouldClaimFocus={shouldClaimFocus}
         onOpenNote={handleOpenInPane}
-        runsNeedingYou={queue.counts.waiting}
         onTitleCommit={handleRenameNote}
         onNew={() => void createNote()}
-        onSaveMarkdown={handleSaveMarkdown}
+        onSaveMarkdown={() => void handleSaveMarkdown()}
         onExportPdf={() => activeNote && exportToPdf(activeNote.title)}
         onMoveNote={setMovingId}
         onOpenHistory={() => void openHistory()}
         onToggleSidebar={toggleSidebar}
         onToggleFocus={toggleFocus}
         onOpenPalette={() => setPaletteOpen(true)}
-        onOpenAssistant={toggleAssistant}
+        onOpenActivity={toggleActivity}
+        activityUnseen={activity.unseen}
         onOpenTrash={() => void openTrash()}
         onOpenImport={openImport}
         onOpenExport={() => setExportOpen(true)}
         onOpenAppearance={() => setThemePickerOpen(true)}
         onOpenAbout={() => setAboutOpen(true)}
-        onInlineAsk={assistant.complete}
-        approval={inlineApproval}
-        onApproveAction={assistant.approve}
-        onRejectAction={assistant.reject}
         onAddTask={addTaskFromText}
         onAddBookmark={captureSelectionBookmark}
         onFocusedEditorChange={setEditor}
@@ -1308,37 +1305,7 @@ export default function App() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         commands={commands}
-        notes={notes}
-        onOpenNote={handleSelect}
-      />
-
-      <AssistantPanel
-        open={assistantOpen}
-        onClose={closeAssistant}
-        height={assistantResize.size}
-        resizeHandle={
-          <div {...assistantResize.handleProps} aria-label="Resize Clever Trevor" />
-        }
-        filePaths={notes.map((n) => n.id)}
-        activePath={activeNote?.id ?? null}
-        settings={assistant.settings}
-        onUpdateSettings={assistant.updateSettings}
-        view={assistantView}
-        onViewChange={setAssistantView}
-        sharing={settingsSharing}
-        settingsError={assistant.settingsError}
-        messages={assistant.messages}
-        streamingText={assistant.streamingText}
-        status={assistant.status}
-        pending={assistant.pending}
-        onSend={assistant.send}
-        onApprove={assistant.approve}
-        onReject={assistant.reject}
-        onApproveAll={assistant.approveAll}
-        onStop={assistant.stop}
-        onClear={assistant.clear}
-        queue={queue}
-        onOpenRun={setOpenRunId}
+        notes={allFiles}
         onOpenNote={handleSelect}
       />
 
@@ -1360,6 +1327,7 @@ export default function App() {
         dir={libraryDir}
         libraryName={libraryName}
         noteCount={notes.length}
+        fileCount={allFiles.length - notes.length}
         onClose={() => setExportOpen(false)}
       />
 
@@ -1370,7 +1338,6 @@ export default function App() {
         ref={fileInput}
         type="file"
         multiple
-        accept={IMPORT_ACCEPT}
         className="visually-hidden"
         onChange={(e) => {
           if (e.target.files?.length) handleImportFiles(e.target.files)
@@ -1457,21 +1424,6 @@ export default function App() {
         open={shortcutsOpen}
         onClose={() => setShortcutsOpen(false)}
         mod={MOD_KEY}
-      />
-
-      <RunModal
-        runId={openRunId}
-        queue={queue}
-        settings={assistant.settings}
-        onClose={() => setOpenRunId(null)}
-        onOpenNote={(path) => handleSelect(path)}
-      />
-
-      <MemoryModal
-        open={memoryOpen}
-        dir={libraryDir}
-        revision={memoryRevision}
-        onClose={() => setMemoryOpen(false)}
       />
 
       <AboutModal

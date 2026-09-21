@@ -11,6 +11,11 @@
 // `.deckle/tasks.json` the app reads, or the two halves would quietly disagree.
 // So this module mirrors those rules. The formats are the contract — if one
 // side changes, the other must follow.
+//
+// A library holds files as well as notes — whatever an agent produced: PDFs,
+// spreadsheets, images. They follow the same rules where the rules make
+// sense: deleting one moves it to the recycle bin, and replacing one moves the
+// old copy there too, since a binary file has no text to snapshot.
 
 const MD_EXT = /\.md$/i
 const ILLEGAL = /[\\/:*?"<>|]/g
@@ -49,6 +54,17 @@ export class ApiError extends Error {
 
 function baseName(fileName) {
   return fileName.replace(MD_EXT, '')
+}
+
+/** A `.md` file is a note; anything else is a file. */
+export function isNotePath(path) {
+  return MD_EXT.test(path)
+}
+
+/** "report.final.pdf" → { stem: "report.final", ext: ".pdf" }; no ext → "". */
+function splitExt(name) {
+  const dot = name.lastIndexOf('.')
+  return dot > 0 ? { stem: name.slice(0, dot), ext: name.slice(dot) } : { stem: name, ext: '' }
 }
 
 function splitPath(id) {
@@ -106,6 +122,17 @@ export function normalizeNotePath(raw) {
   const leaf = segments.pop()
   const name = MD_EXT.test(leaf) ? leaf : `${leaf}.md`
   return joinPath(segments.join('/'), name)
+}
+
+/**
+ * Normalise the path of any file — a note or not — from a request. The same
+ * rules as a note path, except that the extension is the caller's: an agent
+ * saving `report.pdf` means exactly that.
+ */
+export function normalizeFilePath(raw) {
+  const folder = normalizeFolderPath(raw)
+  if (!folder) throw new ApiError(400, 'invalid_path', 'path is required')
+  return folder
 }
 
 /** Same rules, but for a folder path (no extension forced, '' means the root). */
@@ -202,13 +229,34 @@ export function createLibraryStore(library) {
 
   // ---- Notes ---------------------------------------------------------------
 
-  /** Find a free file name in `folder`, appending " 1", " 2", … on collision. */
+  /**
+   * Find a free name in `folder`, appending " 1", " 2", … on collision —
+   * before the extension, so "report.pdf" becomes "report 1.pdf".
+   */
   async function uniqueName(folder, desired) {
     if (!(await library.exists(joinPath(folder, desired)))) return desired
-    const base = baseName(desired)
+    const { stem, ext } = splitExt(desired)
     for (let i = 1; ; i++) {
-      const candidate = `${base} ${i}.md`
+      const candidate = `${stem} ${i}${ext}`
       if (!(await library.exists(joinPath(folder, candidate)))) return candidate
+    }
+  }
+
+  /** What the API says about a file that isn't a note: everything but its bytes. */
+  async function readFileInfo(path) {
+    const kind = await library.exists(path)
+    if (kind !== 'file') throw new ApiError(404, 'not_found', `no file at "${path}"`)
+    const stat = await library.stat(path)
+    const { parentPath, name } = splitPath(path)
+    const dot = name.lastIndexOf('.')
+    return {
+      path,
+      name,
+      folder: parentPath,
+      kind: isNotePath(path) ? 'note' : 'file',
+      ext: dot > 0 ? name.slice(dot + 1).toLowerCase() : '',
+      size: stat.size,
+      updatedAt: stat.lastModified,
     }
   }
 
@@ -242,7 +290,7 @@ export function createLibraryStore(library) {
    * Create or replace a note. An overwrite snapshots the version it replaces
    * into `.history` first, so an agent's edits are as recoverable as the app's.
    */
-  async function writeNote(path, content, reason = 'ai') {
+  async function writeNote(path, content, reason = 'agent') {
     const existing = await library.exists(path)
     if (existing === 'directory') {
       throw new ApiError(409, 'conflict', `"${path}" is a folder`)
@@ -263,11 +311,47 @@ export function createLibraryStore(library) {
     if (await library.exists(to)) {
       throw new ApiError(409, 'conflict', `a note already exists at "${to}"`)
     }
-    const content = await library.readText(from)
-    await library.writeText(to, content)
-    await library.remove(from, false)
+    await library.rename(from, to)
     await retargetHistory(from, to)
     return await readNote(to)
+  }
+
+  /** Move or rename any file. Notes keep their history; others just move. */
+  async function moveFile(from, to) {
+    if (from === to) return await readFileInfo(from)
+    if ((await library.exists(from)) !== 'file') {
+      throw new ApiError(404, 'not_found', `no file at "${from}"`)
+    }
+    if (await library.exists(to)) {
+      throw new ApiError(409, 'conflict', `something already exists at "${to}"`)
+    }
+    await library.rename(from, to)
+    if (isNotePath(from)) await retargetHistory(from, to)
+    return await readFileInfo(to)
+  }
+
+  /**
+   * Store a file's bytes from a stream, keeping whatever it replaces.
+   *
+   * The upload lands under a hidden name first, so a connection that drops
+   * half way leaves the old file exactly where it was. Only once every byte
+   * has arrived does the old copy move to the recycle bin — marked as
+   * replaced, and restorable like anything deleted — and the new one take its
+   * place.
+   */
+  async function putFile(path, stream, { replacedBy } = {}) {
+    const existing = await library.exists(path)
+    if (existing === 'directory') throw new ApiError(409, 'conflict', `"${path}" is a folder`)
+    const incoming = `${DATA_DIR}/incoming/${Date.now()}-${Math.random().toString(36).slice(2)}`
+    try {
+      await library.writeFile(incoming, stream)
+      if (existing === 'file') await trashEntry(path, { reason: 'replaced', by: replacedBy })
+      await library.rename(incoming, path)
+    } catch (err) {
+      await library.remove(incoming, false).catch(() => {})
+      throw err
+    }
+    return { file: await readFileInfo(path), created: existing !== 'file' }
   }
 
   // ---- Recycle bin ---------------------------------------------------------
@@ -282,25 +366,54 @@ export function createLibraryStore(library) {
     return valid
   }
 
-  /** Move a note to the recycle bin, recording where it came from. */
-  async function trashNote(path) {
-    const content = await library.readText(path)
+  /**
+   * Move a note or a file to the recycle bin, recording where it came from.
+   *
+   * A rename, so a large file costs no more than a note and arrives intact.
+   * `reason` is 'replaced' when a newer version took its place, so the bin can
+   * say why an item is there; `by` names the token that did it.
+   */
+  async function trashEntry(path, { reason, by } = {}) {
     return await withLock(TRASH_INDEX, async () => {
       const { name } = splitPath(path)
       const trashName = await uniqueName(TRASH_DIR, name)
-      await library.writeText(joinPath(TRASH_DIR, trashName), content)
-      await library.remove(path, false)
+      await library.rename(path, joinPath(TRASH_DIR, trashName))
 
       const items = await readJson(TRASH_INDEX, [])
       const entry = {
         trashName,
         originalPath: path,
-        title: baseName(name),
+        title: isNotePath(name) ? baseName(name) : name,
         deletedAt: Date.now(),
       }
+      if (!isNotePath(name)) entry.kind = 'file'
+      if (reason) entry.reason = reason
+      if (by) entry.by = by
       await writeJson(TRASH_INDEX, [...(Array.isArray(items) ? items : []), entry])
       return entry
     })
+  }
+
+  /** Kept under its old name: every existing caller trashes notes. */
+  const trashNote = (path) => trashEntry(path)
+
+  /**
+   * Delete a folder the way the app does: everything in it — notes and files —
+   * goes to the recycle bin, then the emptied folder goes. Returns how many
+   * items were binned.
+   */
+  async function trashFolder(folder, { by } = {}) {
+    const entries = []
+    const collect = (nodes) => {
+      for (const node of nodes) {
+        if (node.kind === 'folder') collect(node.children)
+        else entries.push(joinPath(folder, node.id))
+      }
+    }
+    collect(await library.tree(folder))
+    for (const path of entries) await trashEntry(path, { by })
+    await library.remove(folder, true)
+    return entries.length
   }
 
   async function restoreTrash(trashName) {
@@ -311,18 +424,16 @@ export function createLibraryStore(library) {
       )
       if (!entry) throw new ApiError(404, 'not_found', 'no such item in the recycle bin')
 
-      const content = await library.readText(joinPath(TRASH_DIR, trashName))
       const { parentPath, name } = splitPath(entry.originalPath)
       const target = await uniqueName(parentPath, name)
       const path = joinPath(parentPath, target)
 
-      await library.writeText(path, content)
-      await library.remove(joinPath(TRASH_DIR, trashName), false)
+      await library.rename(joinPath(TRASH_DIR, trashName), path)
       await writeJson(
         TRASH_INDEX,
         items.filter((i) => i.trashName !== trashName),
       )
-      return await readNote(path)
+      return isNotePath(path) ? await readNote(path) : await readFileInfo(path)
     })
   }
 
@@ -475,9 +586,15 @@ export function createLibraryStore(library) {
     writeNote,
     moveNote,
     uniqueName,
+    // files
+    readFileInfo,
+    moveFile,
+    putFile,
     // bin
     listTrash,
     trashNote,
+    trashEntry,
+    trashFolder,
     restoreTrash,
     deleteTrashItem,
     // history

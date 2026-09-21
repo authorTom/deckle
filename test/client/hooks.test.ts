@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useDataFile } from '../../src/hooks/useDataFile'
 import { useNotes } from '../../src/hooks/useNotes'
 import { useTasks } from '../../src/tasks/useTasks'
+import * as history from '../../src/fs/history'
 import { createMemFs, get, put, sleep } from '../helpers/memfs'
 
 interface Items {
@@ -188,5 +189,44 @@ describe('useNotes autosave', () => {
     expect(writes).toEqual(['v1', 'v2'])
     expect(await get(dir, 'a.md')).toBe('v2')
     await waitFor(() => expect(result.current.saveState).toBe('saved'))
+  })
+
+  it('keeps an agent’s rewrite of the note being typed in, and never mistakes its own saves for one', async () => {
+    const dir = createMemFs()
+    await put(dir, 'a.md', 'original')
+    ;(window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker =
+      async () => dir
+    const { result } = renderHook(() => useNotes())
+    await waitFor(() => expect(result.current.status).toBe('no-library'))
+    await act(async () => {
+      await result.current.connect()
+    })
+    await waitFor(() => expect(result.current.activeContent).toBe('original'))
+    const agentSnapshots = async () =>
+      (await history.listHistory(dir, 'a.md')).filter((i) => i.reason === 'agent')
+
+    // The app's own saves, then a reload with an edit still buffered: nothing
+    // else touched the file, so nothing is kept on an agent's behalf.
+    act(() => result.current.saveContent('a.md', 'mine 1'))
+    await act(async () => {
+      await result.current.flush()
+    })
+    act(() => result.current.saveContent('a.md', 'mine 2'))
+    await act(async () => {
+      await result.current.reload()
+    })
+    expect(await agentSnapshots()).toEqual([])
+
+    // An agent rewrites the file while the writer has an edit buffered.
+    await put(dir, 'a.md', 'agent version')
+    act(() => result.current.saveContent('a.md', 'mine 3'))
+    await act(async () => {
+      await result.current.reload()
+    })
+    const kept = await agentSnapshots()
+    expect(kept).toHaveLength(1)
+    expect(await history.readSnapshot(dir, kept[0].snapName)).toBe('agent version')
+    // The typing still wins on disk.
+    expect(await get(dir, 'a.md')).toBe('mine 3')
   })
 })

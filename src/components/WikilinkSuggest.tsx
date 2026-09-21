@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { FileText } from 'lucide-react'
 import type { Editor } from '@tiptap/react'
-import type { NoteFile } from '../fs/library'
+import type { LibraryFile } from '../fs/library'
+import { iconFor } from '../lib/fileTypes'
 import { wikilinkTargetFor } from '../lib/wikilinks'
 import { folderOf } from '../lib/format'
 
 interface WikilinkSuggestProps {
   editor: Editor | null
-  notes: NoteFile[]
+  /** Notes and files alike: `[[` can link a PDF as readily as a note. */
+  notes: LibraryFile[]
   /** The note being edited — decides whether a bare title is unambiguous. */
   noteId: string | null
 }
@@ -83,7 +84,7 @@ export default function WikilinkSuggest({
   }, [trigger, notes, noteId])
 
   const pick = useCallback(
-    (note: NoteFile) => {
+    (note: LibraryFile) => {
       if (!editor || !trigger) return
       const target = wikilinkTargetFor(note, notes, noteId)
       editor
@@ -133,7 +134,9 @@ export default function WikilinkSuggest({
       role="listbox"
       aria-label="Link to note"
     >
-      {matches.map((note, i) => (
+      {matches.map((note, i) => {
+        const Icon = iconFor(note)
+        return (
         <button
           key={note.id}
           type="button"
@@ -148,11 +151,12 @@ export default function WikilinkSuggest({
             pick(note)
           }}
         >
-          <FileText size={14} />
+          <Icon size={14} />
           <span className="wikilink-suggest-title">{note.title}</span>
           <span className="wikilink-suggest-path">{folderOf(note.id)}</span>
         </button>
-      ))}
+        )
+      })}
     </div>
   )
 }

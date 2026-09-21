@@ -36,7 +36,6 @@ function groups(mod: string): Group[] {
       title: 'Anywhere',
       items: [
         { keys: [mod, 'K'], what: 'Command palette — every command, and any note by name' },
-        { keys: [mod, 'J'], what: 'Clever Trevor — ask about your notes, or queue him a job' },
         { keys: ['?'], what: 'This list' },
         { keys: [mod, 'Shift', 'F'], what: 'Focus mode: hide everything but the page' },
         { keys: [mod, 'Shift', 'A'], what: 'Capture the selection as a task, or open the planner' },

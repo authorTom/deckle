@@ -18,7 +18,9 @@ interface HistoryModalProps {
 
 const REASON_LABEL: Record<SnapshotReason, string> = {
   edit: 'while editing',
-  ai: 'before AI edit',
+  agent: 'before an agent changed it',
+  // Written by Deckle 2.x, whose AI assistant snapshotted before each edit.
+  ai: 'before an AI edit',
   restore: 'before restore',
 }
 
@@ -86,7 +88,7 @@ export default function HistoryModal({
           {items.length === 0 ? (
             <div className="modal-empty">
               No earlier versions yet. Versions are saved periodically while you
-              edit and before every AI change.
+              edit, and before an agent changes the note through the API.
             </div>
           ) : (
             items.map((item) => {

@@ -5,7 +5,8 @@
   .scrim,
   .topbar,
   .toolbar,
-  .bubble-menu {
+  .bubble-menu,
+  .note-properties {
     display: none !important;
   }
 

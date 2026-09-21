@@ -13,6 +13,8 @@ interface ExportModalProps {
   dir: FileSystemDirectoryHandle | null
   libraryName: string | null
   noteCount: number
+  /** Files that aren't notes: PDFs, spreadsheets, images… */
+  fileCount: number
   onClose: () => void
 }
 
@@ -21,6 +23,7 @@ export default function ExportModal({
   dir,
   libraryName,
   noteCount,
+  fileCount,
   onClose,
 }: ExportModalProps) {
   const [includeHidden, setIncludeHidden] = useState(false)
@@ -93,9 +96,14 @@ export default function ExportModal({
         <div className="modal-body">
           <p className="modal-note">
             Downloads everything in <strong>{libraryName ?? 'this library'}</strong> as a
-            single ZIP — {noteCount} note{noteCount === 1 ? '' : 's'} with their folder
-            structure intact, plus your tasks and bookmarks. Unzip it anywhere, or open
-            it in any editor; it's just Markdown.
+            single ZIP — {noteCount} note{noteCount === 1 ? '' : 's'}
+            {fileCount > 0 && (
+              <>
+                {' '}and {fileCount} other file{fileCount === 1 ? '' : 's'}
+              </>
+            )}{' '}
+            with their folder structure intact, plus your tasks, bookmarks and the
+            activity log. Unzip it anywhere; it's just files.
           </p>
 
           <label className="export-option">
@@ -116,7 +124,7 @@ export default function ExportModal({
           {running && (
             <div className="export-status" role="status">
               {progress.phase === 'reading'
-                ? `Reading notes… (${progress.done})`
+                ? `Reading files… (${progress.done})`
                 : `Compressing… (${progress.done} of ${progress.total})`}
             </div>
           )}

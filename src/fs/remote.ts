@@ -1,8 +1,8 @@
 // Server library: a third storage backend, behind the same interface as the
 // other two.
 //
-// src/fs/library.ts, history.ts, tasks/store.ts, bookmarks/store.ts and the AI
-// tools all speak `FileSystemDirectoryHandle`. Rather than thread a second
+// src/fs/library.ts, history.ts, tasks/store.ts and bookmarks/store.ts all
+// speak `FileSystemDirectoryHandle`. Rather than thread a second
 // storage abstraction through all of them, this module implements that same
 // handle interface on top of the container's file API (see server/library-api.mjs),
 // so the entire app keeps working unchanged when notes live on the server.
@@ -19,12 +19,8 @@ export interface ServerLibraryInfo {
   name: string
   authRequired: boolean
   authenticated: boolean
-  /**
-   * Whether this server holds the assistant's settings for every device that
-   * signs in. False on a server with no password, which the app explains
-   * rather than silently keeping the key in one browser.
-   */
-  sharedSettings: boolean
+  /** The folder projects live in (DECKLE_PROJECTS_DIR), "Projects" by default. */
+  projectsDir?: string
 }
 
 /** Called when the server rejects a request as unauthenticated mid-session. */
@@ -291,6 +287,43 @@ export async function writeRemoteFile(
   })
   const body = (await res.json()) as { lastModified: number }
   return body.lastModified
+}
+
+/**
+ * Move a file or folder on the server in one request, without transferring it.
+ *
+ * The handle interface can only copy and delete, which for a 90 MB PDF means
+ * downloading it and uploading it again. The server can simply rename. Refuses
+ * (as a 409) to replace anything at `to`.
+ */
+export async function moveRemoteEntry(
+  dir: RemoteDirectoryHandle,
+  from: string,
+  to: string,
+): Promise<void> {
+  await request(
+    `${API}/move${query(joinPath(dir.path, from), { to: joinPath(dir.path, to) })}`,
+    { method: 'POST' },
+  )
+}
+
+/**
+ * An entry's modification time and size, or null when it doesn't exist — one
+ * small request, for polling a file (the activity log) for change without
+ * downloading it.
+ */
+export async function statRemote(
+  dir: RemoteDirectoryHandle,
+  path: string,
+): Promise<{ lastModified: number; size: number } | null> {
+  try {
+    const res = await request(`${API}/stat${query(joinPath(dir.path, path))}`)
+    const stat = (await res.json()) as { kind: string; lastModified?: number; size?: number }
+    return stat.kind === 'file' ? { lastModified: stat.lastModified ?? 0, size: stat.size ?? 0 } : null
+  } catch (err) {
+    if (err instanceof NotFoundError) return null
+    throw err
+  }
 }
 
 /**

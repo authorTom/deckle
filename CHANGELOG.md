@@ -8,7 +8,118 @@ here.
 
 ## [Unreleased]
 
-Nothing yet.
+A change of direction, and a major release (3.0.0) when it is cut. Deckle
+stops being a note app with an AI assistant built in and becomes the knowledge
+base for an agent that lives elsewhere — Hermes, or anything else that speaks
+MCP or HTTP. The agent does the thinking; Deckle stores what it produces, shows
+it, searches it, and keeps a record of what it did. **Read Removed before
+upgrading** if you used the assistant.
+
+### Added
+
+- **Files, not just notes.** The library holds any file beside the notes —
+  PDFs, spreadsheets, Word and PowerPoint documents, images, audio, video,
+  CSV, JSON, code — shown in the tree with their own icons and opened in a tab
+  like a note. The viewer shows images, PDFs (in the browser's own viewer),
+  audio and video; renders Word documents, every sheet of an Excel workbook,
+  PowerPoint slides, CSV tables, JSON and text; and offers anything else as a
+  download. Files move, rename, delete and restore exactly as notes do, and
+  byte for byte: moving, binning or restoring one on the server library is a
+  rename, with nothing downloaded or uploaded again.
+- **An MCP server at `/api/v1/mcp`**, behind the same tokens as the REST API.
+  Tools: `search`, `read`, `list`, `list_projects`, `recent_activity`, and —
+  for a read-write token — `write_note`, `save_file`, `create_project`,
+  `update_project`, `log_progress`, `move` and `delete`. Streamable HTTP,
+  stateless, answering in JSON. A read-only token is shown the read tools
+  only.
+- **Projects.** Every folder inside `Projects/` is a project, with a status,
+  summary and tags in its `Overview.md` front matter and a dated `Log.md` the
+  agent keeps as it works. A **Projects** view lists them by what changed last,
+  filters by status, changes a status in place, and starts new ones.
+- **Activity.** Every change made with an API token or over MCP is recorded in
+  `.deckle/activity.jsonl` under the token's name, with whatever the agent said
+  about it. The **Activity** feed shows it grouped by day, filterable by
+  project and agent, and the Activity button in the top bar counts what is new
+  since you last looked. A file's viewer says which agent saved it, when, and
+  why.
+- **The app notices an agent's changes.** On a server library it checks the
+  activity log every 15 seconds while the tab is visible, and on focus, and
+  reloads the tree and any open note when it moves — so a file an agent saves
+  appears without a refresh. If an agent rewrites the note you are typing in,
+  your typing still wins, but its version is kept in history first.
+- **Front matter is kept, and shown.** A note's YAML front matter appears as a
+  properties strip above the text, editable as YAML, and is never passed to
+  the editor — which used to turn the fence into a rule and a heading and save
+  that back.
+- **Images in notes.** `![chart](charts/revenue.png)` shows the image, from the
+  library or the web.
+- **Search inside documents.** `GET /api/v1/search` and MCP's `search` rank
+  notes and files together, reading the text inside Word, Excel, PowerPoint,
+  OpenDocument, CSV, JSON, text and code files. PDFs and images are matched by
+  name. `kind=note|file` narrows a search to one or the other. The sidebar's
+  quick search finds files by name.
+- **`/api/v1/files`** — store any file from a raw request body (`PUT`), fetch it
+  (`GET`, or `?meta=true` for its details), bin it (`DELETE`), and list files
+  newest first. Replacing a file moves the old copy to the recycle bin; `.md`
+  paths are written as notes, with history.
+- **`GET /api/v1/activity`** — the activity log, filterable by `since`,
+  `project`, `actor` and `path`.
+- **A Hermes integration kit** in `integrations/hermes/`: setup instructions, a
+  skill that teaches Hermes how to use Deckle, and `deckle_push.py`, a
+  standard-library Python script for sending large files and whole folders —
+  which never sends hidden files, `.env` files, private keys or dependency
+  caches, and honours a `.deckleignore`.
+- **Importing takes any file.** Dropping or picking PDFs, images or whole
+  folders stores them as they are; a ZIP brings everything inside it, not just
+  its Markdown. Hidden files and `node_modules`-style caches stay behind.
+- `DECKLE_MAX_FILE_MB` (default 100) caps a single file; `DECKLE_PROJECTS_DIR`
+  (default `Projects`) moves the projects folder.
+
+### Removed
+
+- **The AI assistant**, and everything that came with it: Clever Trevor's chat
+  sheet, the background queue, the assistant's memory, Ask AI on a selection,
+  the `/ask`, `/summarize`, `/explain` and `/todo` commands, semantic search,
+  and the model picker. `Ctrl`/`Cmd`+`J` does nothing now. Nothing in your
+  library is touched: the files the assistant wrote are ordinary notes, and
+  its own folders — `.deckle/memory/`, `.deckle/runs/` — stay where they are
+  until you delete them.
+- **`/api/assistant-settings`**, and the server's copy of the assistant's
+  settings. If you used a password-protected server library, **the provider API
+  key you entered is still in `.deckle-state/assistant.json` on the volume**.
+  Deckle keeps refusing to serve that folder, but it no longer needs the file:
+  delete it, and revoke the key with your provider if you are done with it.
+- The `@anthropic-ai/sdk` dependency.
+
+### Changed
+
+- **The API's folder tree includes files.** `GET /api/v1/folders` (and the app's
+  own tree) now carries every file, as `kind: "asset"` nodes with `name`,
+  `title`, `ext` and `size`, beside the notes' `kind: "file"`. Code that
+  assumed only folders and notes should skip the new kind. `GET /api/v1/notes`
+  still lists notes only.
+- **Deleting a folder bins everything in it.** `DELETE /api/v1/folders/{path}`
+  and the app used to send a folder's notes to the recycle bin and erase any
+  other file inside it; files now go to the bin too.
+- **Version history made through the API says "agent"** rather than "AI"
+  (older snapshots keep their label). Every API write is also in the activity
+  log.
+- **The Content-Security-Policy is tighter.** `connect-src` is `'self'` — the
+  page talked to AI providers, and now talks to nothing but this server — and
+  `blob:` is allowed for frames, objects and media, which is how a stored PDF,
+  audio or video file is previewed.
+- The side panel is **Projects · Activity · Tasks · Bookmarks**.
+- `@types/node` is now a declared dev dependency; it used to arrive by way of
+  the Anthropic SDK.
+
+### Fixed
+
+- **Images vanished from notes.** The editor had no image node, so any
+  `![alt](src)` in a note was dropped on load and deleted from the file by the
+  next save.
+- **A note's front matter was mangled** by editing the note in the app.
+- Downloading a note as `.md` now copies the file itself, front matter
+  included, rather than what the editor holds.
 
 ## [2.0.0] — 2026-09-15
 

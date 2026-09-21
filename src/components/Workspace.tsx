@@ -6,28 +6,37 @@ import Toolbar from './Toolbar'
 import NoteTabs from './NoteTabs'
 import EditorPane from './EditorPane'
 import EditorSkeleton from './EditorSkeleton'
-import type { InlineAsk } from './InlineAssistant'
-import type { PendingAction } from '../ai/useAssistant'
-import type { NoteFile } from '../fs/library'
+import FileViewer from './FileViewer'
+import type { AssetFile, LibraryFile, NoteFile } from '../fs/library'
+import type { ActivityEvent } from '../activity/activity'
 import type { Pane, SaveState } from '../hooks/useNotes'
 import type { Backlink } from '../lib/wikilinks'
 import type { EnterFrom, FlightOrigin } from '../lib/motion'
 import type { Theme } from '../hooks/useTheme'
 
 interface WorkspaceProps {
-  notes: NoteFile[]
-  openNotes: NoteFile[]
+  /** Every note and file, for wikilinks — which may point at either. */
+  notes: LibraryFile[]
+  /** The tab strip: notes and files, in order. */
+  openNotes: LibraryFile[]
   activeNote: NoteFile | null
+  /** The primary pane's file, when its tab is a file rather than a note. */
+  activeAsset: AssetFile | null
   activeContent: string | null
   splitNote: NoteFile | null
+  splitAsset: AssetFile | null
   splitContent: string | null
+  /** Read a file's bytes from the library. */
+  readFile: (id: string) => Promise<Blob>
+  /** The newest thing an agent did to a path, for a file's provenance line. */
+  provenanceFor: (id: string) => ActivityEvent | null
+  onDeleteFile: (id: string) => void
+  onDownloadFile: (id: string) => void
   focusedPane: Pane
   onFocusPane: (pane: Pane) => void
   backlinks: Backlink[]
   splitBacklinks: Backlink[]
   saveState: SaveState
-  /** Background runs parked on a question, badged on the assistant button. */
-  runsNeedingYou: number
   saveError: string | null
   lastSavedAt: number | null
   isDirty: (id: string) => boolean
@@ -58,26 +67,19 @@ interface WorkspaceProps {
   onNew: () => void
   onSaveMarkdown: () => void
   onExportPdf: () => void
-  /** Ask where the focused note should live. */
+  /** Ask where the focused note (or file) should live. */
   onMoveNote: (noteId: string) => void
   onOpenHistory: () => void
   onToggleSidebar: () => void
   onToggleFocus: () => void
   onOpenPalette: () => void
-  onOpenAssistant: () => void
+  onOpenActivity: () => void
+  activityUnseen: number
   onOpenTrash: () => void
   onOpenImport: () => void
   onOpenExport: () => void
   onOpenAppearance: () => void
   onOpenAbout: () => void
-  onInlineAsk: InlineAsk
-  /**
-   * The assistant's proposed edit, waiting on a person. Handed to whichever
-   * pane holds the note it targets, so the question is asked at the text.
-   */
-  approval?: PendingAction | null
-  onApproveAction: (id: string) => void
-  onRejectAction: (id: string) => void
   onAddTask: (text: string) => void
   onAddBookmark: () => void
   /** The editor belonging to whichever pane has focus, for the palette. */
@@ -87,7 +89,7 @@ interface WorkspaceProps {
 }
 
 /**
- * What a brand-new library opens on.
+ * What a brand-new library opens on — no notes and no files.
  *
  * Lives inside the panes rather than over the whole app: it used to be an
  * opaque overlay across `.app`, which covered the sidebar it was telling you
@@ -104,11 +106,12 @@ function EmptyLibrary({
 }) {
   return (
     <div className="empty-state">
-      <h2>No notes yet</h2>
+      <h2>Nothing here yet</h2>
       <p>
-        Start one here, or bring in Markdown you already have — loose files, a
-        folder, or a ZIP. Nested folders keep their structure and nothing is
-        overwritten.
+        Start a note, or bring in what you already have — Markdown, PDFs,
+        spreadsheets, images, a whole folder or a ZIP. Nested folders keep their
+        structure and nothing is overwritten. An agent connected to this library
+        adds its work here as it goes.
       </p>
       <div className="empty-actions">
         <button type="button" className="btn-primary" onClick={onNew}>
@@ -117,7 +120,7 @@ function EmptyLibrary({
         </button>
         <button type="button" className="btn-secondary" onClick={onImport}>
           <Upload size={16} />
-          Import Markdown or ZIP…
+          Import files…
         </button>
       </div>
     </div>
@@ -135,15 +138,20 @@ export default function Workspace({
   notes,
   openNotes,
   activeNote,
+  activeAsset,
   activeContent,
   splitNote,
+  splitAsset,
   splitContent,
+  readFile,
+  provenanceFor,
+  onDeleteFile,
+  onDownloadFile,
   focusedPane,
   onFocusPane,
   backlinks,
   splitBacklinks,
   saveState,
-  runsNeedingYou,
   saveError,
   lastSavedAt,
   isDirty,
@@ -171,16 +179,13 @@ export default function Workspace({
   onToggleSidebar,
   onToggleFocus,
   onOpenPalette,
-  onOpenAssistant,
+  onOpenActivity,
+  activityUnseen,
   onOpenTrash,
   onOpenImport,
   onOpenExport,
   onOpenAppearance,
   onOpenAbout,
-  onInlineAsk,
-  approval,
-  onApproveAction,
-  onRejectAction,
   onAddTask,
   onAddBookmark,
   onFocusedEditorChange,
@@ -193,35 +198,48 @@ export default function Workspace({
   const focusPrimary = useCallback(() => onFocusPane('primary'), [onFocusPane])
   const focusSplit = useCallback(() => onFocusPane('split'), [onFocusPane])
 
-  const focusedEditor =
-    focusedPane === 'split' && splitNote ? splitEditor : primaryEditor
-  const focusedNote = focusedPane === 'split' && splitNote ? splitNote : activeNote
+  const splitItem: LibraryFile | null = splitNote ?? splitAsset
+  const activeItem: LibraryFile | null = activeNote ?? activeAsset
+  const inSplit = focusedPane === 'split' && splitItem !== null
+  const focusedItem = inSplit ? splitItem : activeItem
+  // Only a note has an editor for the toolbar and the palette to drive.
+  const focusedEditor = inSplit
+    ? splitNote
+      ? splitEditor
+      : null
+    : activeNote
+      ? primaryEditor
+      : null
 
   useEffect(() => {
     onFocusedEditorChange(focusedEditor)
   }, [focusedEditor, onFocusedEditorChange])
 
-  const split = splitNote !== null
+  const split = splitItem !== null
 
-  /** An approval belongs to the pane showing the note it would change. */
-  const approvalFor = (noteId: string | undefined) =>
-    approval && noteId && approval.preview.path === noteId ? approval : null
+  // A note's images come from the library; a missing one shows as missing.
+  const loadFile = useCallback(
+    (path: string) => readFile(path).catch(() => null),
+    [readFile],
+  )
 
   return (
     <div className="main">
       <TopBar
-        noteId={focusedNote?.id ?? null}
-        title={focusedNote?.title ?? ''}
+        noteId={focusedItem?.id ?? null}
+        title={focusedItem?.title ?? ''}
         onTitleCommit={onTitleCommit}
         onNew={onNew}
         onSaveMarkdown={onSaveMarkdown}
         onExportPdf={onExportPdf}
-        onMoveNote={() => focusedNote && onMoveNote(focusedNote.id)}
+        onMoveNote={() => focusedItem && onMoveNote(focusedItem.id)}
+        onDownloadFile={() => focusedItem && onDownloadFile(focusedItem.id)}
         onOpenHistory={onOpenHistory}
         onToggleSidebar={onToggleSidebar}
         onToggleFocus={onToggleFocus}
         onOpenPalette={onOpenPalette}
-        onOpenAssistant={onOpenAssistant}
+        onOpenActivity={onOpenActivity}
+        activityUnseen={activityUnseen}
         onOpenTrash={onOpenTrash}
         onOpenImport={onOpenImport}
         onOpenExport={onOpenExport}
@@ -230,12 +248,11 @@ export default function Workspace({
         onToggleSplit={onToggleSplit}
         isSplit={split}
         saveState={saveState}
-        runsNeedingYou={runsNeedingYou}
         saveError={saveError}
         lastSavedAt={lastSavedAt}
         theme={theme}
         onToggleTheme={onToggleTheme}
-        hasNote={!!focusedNote}
+        focusedKind={focusedItem ? (focusedItem.kind === 'file' ? 'note' : 'file') : null}
       />
 
       <NoteTabs
@@ -257,12 +274,27 @@ export default function Workspace({
       <div className={`panes${split ? ' split' : ''}`}>
         {libraryEmpty ? (
           <EmptyLibrary onNew={onNew} onImport={onOpenImport} />
+        ) : activeAsset ? (
+          <FileViewer
+            key={activeAsset.id}
+            file={activeAsset}
+            load={readFile}
+            focused={focusedPane === 'primary' || !split}
+            paneLabel={split ? activeAsset.title : undefined}
+            onFocusPane={focusPrimary}
+            backlinks={backlinks}
+            onOpenNote={onOpenNote}
+            provenance={provenanceFor(activeAsset.id)}
+            onMove={() => onMoveNote(activeAsset.id)}
+            onDelete={() => onDeleteFile(activeAsset.id)}
+          />
         ) : activeNote && activeContent !== null ? (
           <EditorPane
             key={activeNote.id}
             noteId={activeNote.id}
             content={activeContent}
             notes={notes}
+            loadFile={loadFile}
             backlinks={backlinks}
             focused={focusedPane === 'primary' || !split}
             isNew={activeNote.id === justCreatedId}
@@ -274,11 +306,6 @@ export default function Workspace({
             onLeaveNote={onLeaveNote}
             shouldClaimFocus={shouldClaimFocus}
             onOpenNote={onOpenNote}
-            onInlineAsk={onInlineAsk}
-            approval={approvalFor(activeNote.id)}
-            onApproveAction={onApproveAction}
-            onRejectAction={onRejectAction}
-            onOpenAssistant={onOpenAssistant}
             onAddTask={onAddTask}
             onAddBookmark={onAddBookmark}
             onEditorReady={setPrimaryEditor}
@@ -290,12 +317,28 @@ export default function Workspace({
         {split && (
           <>
             <div className="pane-divider" aria-hidden="true" />
-            {splitNote && splitContent !== null ? (
+            {splitAsset ? (
+              <FileViewer
+                key={`split-${splitAsset.id}`}
+                file={splitAsset}
+                load={readFile}
+                focused={focusedPane === 'split'}
+                paneLabel={splitAsset.title}
+                onClosePane={onCloseSplit}
+                onFocusPane={focusSplit}
+                backlinks={splitBacklinks}
+                onOpenNote={onOpenNote}
+                provenance={provenanceFor(splitAsset.id)}
+                onMove={() => onMoveNote(splitAsset.id)}
+                onDelete={() => onDeleteFile(splitAsset.id)}
+              />
+            ) : splitNote && splitContent !== null ? (
               <EditorPane
                 key={`split-${splitNote.id}`}
                 noteId={splitNote.id}
                 content={splitContent}
                 notes={notes}
+                loadFile={loadFile}
                 backlinks={splitBacklinks}
                 focused={focusedPane === 'split'}
                 paneLabel={splitNote.title}
@@ -305,11 +348,6 @@ export default function Workspace({
                 onLeaveNote={onLeaveNote}
                 shouldClaimFocus={shouldClaimFocus}
                 onOpenNote={onOpenNote}
-                onInlineAsk={onInlineAsk}
-                approval={approvalFor(splitNote.id)}
-                onApproveAction={onApproveAction}
-                onRejectAction={onRejectAction}
-                onOpenAssistant={onOpenAssistant}
                 onAddTask={onAddTask}
                 onAddBookmark={onAddBookmark}
                 onEditorReady={setSplitEditor}

@@ -1,4 +1,7 @@
-// Retakes the five README screenshots by driving a real browser.
+// Retakes the editor, tasks, bookmarks and palette README screenshots by
+// driving a real browser. The files, projects and activity screenshots show an
+// agent's work, so they are taken against a library an agent has filled —
+// through /api/v1/mcp — rather than the demo library this script expects.
 //
 // Pair it with make-demo-library.mjs, which builds the library it shoots. The
 // app is served through the *server library* backend on purpose: the disk
@@ -102,12 +105,13 @@ await shot('tasks')
 // The first bookmark is expanded so the comment box is visible — that field is
 // the feature the caption is about.
 
-await page.locator('.panel-tab', { hasText: 'Bookmarks' }).click()
+// Inactive tabs show only their icon, so find this one by its name.
+await page.locator('.panel-tab[aria-label="Bookmarks"]').click()
 await settle(300)
 await page.locator('.bm-title').first().click()
 await shot('bookmarks')
 
-// ---- Dark mode, for the last two -------------------------------------------
+// ---- Dark mode, for the palette --------------------------------------------
 
 // Dismiss the side panel with its own close button. Clicking the sidebar's
 // Tasks icon would only switch the panel back to the tasks tab, leaving it open
@@ -115,12 +119,6 @@ await shot('bookmarks')
 await page.locator('[aria-label="Close panel"]').click()
 await page.locator('[aria-label="Toggle theme"]').click()
 await settle(600)
-
-// ---- Assistant --------------------------------------------------------------
-
-await page.locator('[aria-label="AI assistant"]').click()
-await shot('assistant')
-await page.locator('[aria-label="AI assistant"]').click() // close again
 
 // ---- Command palette --------------------------------------------------------
 

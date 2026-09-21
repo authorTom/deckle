@@ -3,6 +3,12 @@
 // walked recursively, so notes can be organised in nested folders. A note's
 // `id` is its path relative to the library root (POSIX "/" separators).
 //
+// The library holds more than notes: whatever an agent produced or a person
+// dropped in — PDFs, spreadsheets, images, documents — sits beside the notes
+// as ordinary files. The tree carries those as `kind: 'asset'`, so everything
+// that only understands notes (the editor, backlinks, note search) can keep
+// asking for `kind: 'file'` and never be handed a spreadsheet.
+//
 // Three storage backends, sharing the same `FileSystemDirectoryHandle` API:
 //   • On-disk folder — Chromium's `showDirectoryPicker` lets the user pick a
 //     real folder, so notes are visible on disk (open them in any Markdown
@@ -20,6 +26,7 @@ import { isDataDir } from './appData'
 import {
   fetchRemoteTree,
   isRemoteHandle,
+  moveRemoteEntry,
   readRemoteFile,
   writeRemoteFile,
 } from './remote'
@@ -35,6 +42,21 @@ export interface NoteFile {
   updatedAt: number
 }
 
+/** Any file in the library that isn't a note: a PDF, an image, a spreadsheet… */
+export interface AssetFile {
+  kind: 'asset'
+  /** Path relative to the library root, e.g. "Projects/Acme/report.pdf". */
+  id: string
+  /** File name including extension. */
+  name: string
+  /** What the tree and tabs show — for a file, its whole name. */
+  title: string
+  /** Lower-case extension without the dot, '' if none. */
+  ext: string
+  size: number
+  updatedAt: number
+}
+
 export interface NoteFolder {
   kind: 'folder'
   /** Path relative to the library root, e.g. "Projects". */
@@ -43,10 +65,33 @@ export interface NoteFolder {
   children: TreeNode[]
 }
 
-export type TreeNode = NoteFile | NoteFolder
+/** Something that opens in a tab: a note or any other file. */
+export type LibraryFile = NoteFile | AssetFile
+
+export type TreeNode = NoteFile | AssetFile | NoteFolder
 
 const MD_EXT = /\.md$/i
 const ILLEGAL = /[\\/:*?"<>|]/g
+
+/** Operating-system clutter that is never anyone's work (dotfiles are skipped anyway). */
+const CLUTTER = new Set(['thumbs.db', 'desktop.ini', 'icon\r'])
+
+/** A path is a note when it is a `.md` file. */
+export function isNoteId(id: string): boolean {
+  return MD_EXT.test(id)
+}
+
+/** The lower-case extension of a file name, without the dot ('' if none). */
+export function extensionOf(name: string): string {
+  const dot = name.lastIndexOf('.')
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
+}
+
+/** "report.final.pdf" → { stem: "report.final", ext: ".pdf" }. */
+function splitExt(name: string): { stem: string; ext: string } {
+  const dot = name.lastIndexOf('.')
+  return dot > 0 ? { stem: name.slice(0, dot), ext: name.slice(dot) } : { stem: name, ext: '' }
+}
 
 /** Name of the OPFS subfolder that holds the library, so it has a friendly
  *  display name (the OPFS root itself has an empty name). */
@@ -201,7 +246,9 @@ async function mapConcurrent<T, R>(
 }
 
 /** Recursively build the folder/file tree. Hidden entries (dotfiles) are
- *  skipped; empty folders are kept so newly created folders remain visible. */
+ *  skipped; empty folders are kept so newly created folders remain visible.
+ *  Notes and other files sort together by what the tree shows, matching the
+ *  server's walk in server/library-api.mjs. */
 export async function buildTree(
   dir: FileSystemDirectoryHandle,
   prefix = '',
@@ -230,7 +277,7 @@ export async function buildTree(
 
     if (entry.kind === 'directory') {
       dirEntries.push({ id, handle: entry as FileSystemDirectoryHandle })
-    } else if (MD_EXT.test(entry.name)) {
+    } else if (!CLUTTER.has(entry.name.toLowerCase())) {
       fileEntries.push({ id, name: entry.name, handle: entry as FileSystemFileHandle })
     }
   }
@@ -249,13 +296,20 @@ export async function buildTree(
     mapConcurrent(
       fileEntries,
       IO_CONCURRENCY,
-      async ({ id, name, handle }): Promise<NoteFile> => ({
-        kind: 'file',
-        id,
-        name,
-        title: baseName(name),
-        updatedAt: (await handle.getFile()).lastModified,
-      }),
+      async ({ id, name, handle }): Promise<LibraryFile> => {
+        const file = await handle.getFile()
+        return MD_EXT.test(name)
+          ? { kind: 'file', id, name, title: baseName(name), updatedAt: file.lastModified }
+          : {
+              kind: 'asset',
+              id,
+              name,
+              title: name,
+              ext: extensionOf(name),
+              size: file.size,
+              updatedAt: file.lastModified,
+            }
+      },
     ),
   ])
 
@@ -276,13 +330,45 @@ function applyPrefix(nodes: TreeNode[], prefix: string): TreeNode[] {
   )
 }
 
+/** Every note in a tree, in tree order. Other files are left out. */
 export function flattenFiles(nodes: TreeNode[]): NoteFile[] {
   const out: NoteFile[] = []
   for (const node of nodes) {
     if (node.kind === 'file') out.push(node)
-    else out.push(...flattenFiles(node.children))
+    else if (node.kind === 'folder') out.push(...flattenFiles(node.children))
   }
   return out
+}
+
+/** Every file in a tree that isn't a note. */
+export function flattenAssets(nodes: TreeNode[]): AssetFile[] {
+  const out: AssetFile[] = []
+  for (const node of nodes) {
+    if (node.kind === 'asset') out.push(node)
+    else if (node.kind === 'folder') out.push(...flattenAssets(node.children))
+  }
+  return out
+}
+
+/** A file's bytes, for previewing or downloading it. */
+export async function readBlob(
+  dir: FileSystemDirectoryHandle,
+  id: string,
+): Promise<File> {
+  const { parentPath, name } = splitPath(id)
+  const parent = await getDirByPath(dir, parentPath)
+  return await (await parent.getFileHandle(name)).getFile()
+}
+
+/** Write a file's bytes, creating its folders. For files dropped into the library. */
+export async function writeBlob(
+  dir: FileSystemDirectoryHandle,
+  id: string,
+  data: Blob,
+): Promise<void> {
+  const { parentPath, name } = splitPath(id)
+  const parent = await getDirByPath(dir, parentPath, true)
+  await writeRaw(parent, name, data)
 }
 
 export async function readNote(
@@ -344,7 +430,10 @@ async function fileExists(
   }
 }
 
-/** Find a free file name within `parent`, appending " 1", " 2", … on collision. */
+/**
+ * Find a free file name within `parent`, appending " 1", " 2", … on collision
+ * — before the extension, so "report.pdf" becomes "report 1.pdf".
+ */
 async function uniqueName(
   parent: FileSystemDirectoryHandle,
   desired: string,
@@ -352,9 +441,9 @@ async function uniqueName(
 ): Promise<string> {
   if (desired === exceptName) return desired
   if (!(await fileExists(parent, desired))) return desired
-  const base = baseName(desired)
+  const { stem, ext } = splitExt(desired)
   for (let i = 1; ; i++) {
-    const candidate = `${base} ${i}.md`
+    const candidate = `${stem} ${i}${ext}`
     if (candidate === exceptName || !(await fileExists(parent, candidate))) {
       return candidate
     }
@@ -380,11 +469,11 @@ export async function createNote(
   }
 }
 
-/** Write text to `name` within a directory handle (creating it if needed). */
+/** Write text or bytes to `name` within a directory handle (creating it if needed). */
 async function writeRaw(
   parent: FileSystemDirectoryHandle,
   name: string,
-  content: string,
+  content: string | Blob,
 ): Promise<void> {
   const handle = await parent.getFileHandle(name, { create: true })
   const writable = await handle.createWritable()
@@ -401,13 +490,36 @@ export async function renameNote(
   id: string,
   newTitle: string,
 ): Promise<string> {
+  return await renameEntry(dir, id, `${sanitizeTitle(newTitle)}.md`)
+}
+
+/**
+ * Rename a file that isn't a note. Its extension is kept unless the new name
+ * brings one of its own, so renaming "Q3.pdf" to "Q3 final" gives "Q3 final.pdf".
+ */
+export async function renameAsset(
+  dir: FileSystemDirectoryHandle,
+  id: string,
+  newName: string,
+): Promise<string> {
+  const { name } = splitPath(id)
+  const cleaned = sanitizeName(newName, name)
+  const { ext } = splitExt(name)
+  const desired = ext && !extensionOf(cleaned) ? `${cleaned}${ext}` : cleaned
+  return await renameEntry(dir, id, desired)
+}
+
+/** Rename a file in place, byte for byte, dodging collisions. Returns the new id. */
+async function renameEntry(
+  dir: FileSystemDirectoryHandle,
+  id: string,
+  desired: string,
+): Promise<string> {
   const { parentPath, name } = splitPath(id)
-  const desired = `${sanitizeTitle(newTitle)}.md`
   if (desired === name) return id
 
   const parent = await getDirByPath(dir, parentPath)
   const src = await parent.getFileHandle(name)
-  const content = await (await src.getFile()).text()
 
   // Does a file with the desired name already exist, and is it a *different*
   // file than the source? (On case-insensitive filesystems, "Note.md"
@@ -422,23 +534,30 @@ export async function renameNote(
     // `desired` doesn't exist — free to use it.
   }
 
+  const target = realConflict ? await uniqueName(parent, desired, name) : desired
+  if (target === name) return id
+
+  // The server renames in place, which handles a case-only change too.
+  if (isRemoteHandle(dir)) {
+    await moveRemoteEntry(dir, id, joinPath(parentPath, target))
+    return joinPath(parentPath, target)
+  }
+
+  const content = await src.getFile()
   if (sameEntryDifferentCase) {
     // Case-only rename on a case-insensitive filesystem. Creating the new name
     // directly just re-opens the same file, so hop through a temporary name to
     // force the directory entry to adopt the new casing.
-    const tempName = `.deckle-rename-${Date.now()}.md`
+    const tempName = `.deckle-rename-${Date.now()}${splitExt(name).ext}`
     await writeRaw(parent, tempName, content)
     await parent.removeEntry(name)
-    await writeRaw(parent, desired, content)
+    await writeRaw(parent, target, content)
     await parent.removeEntry(tempName)
-    return joinPath(parentPath, desired)
+    return joinPath(parentPath, target)
   }
 
-  const target = realConflict ? await uniqueName(parent, desired, name) : desired
-  if (target === name) return id
   await writeRaw(parent, target, content)
   await parent.removeEntry(name)
-
   return joinPath(parentPath, target)
 }
 
@@ -546,8 +665,10 @@ export async function renameFolder(
 }
 
 /**
- * Move a note file into `targetFolderPath` (root if empty). Returns the new id.
- * No-op (returns the original id) if already in that folder.
+ * Move a note — or any other file — into `targetFolderPath` (root if empty).
+ * Returns the new id. No-op (returns the original id) if already in that folder.
+ * Copies bytes, not text, so a PDF arrives intact; on the server library it is
+ * a rename and nothing is transferred at all.
  */
 export async function moveNote(
   dir: FileSystemDirectoryHandle,
@@ -560,12 +681,18 @@ export async function moveNote(
   const srcParent = await getDirByPath(dir, parentPath)
   const destParent = await getDirByPath(dir, targetFolderPath, true)
   const targetName = await uniqueName(destParent, name)
+  const to = joinPath(targetFolderPath, targetName)
 
-  const content = await (await (await srcParent.getFileHandle(name)).getFile()).text()
+  if (isRemoteHandle(dir)) {
+    await moveRemoteEntry(dir, id, to)
+    return to
+  }
+
+  const content = await (await srcParent.getFileHandle(name)).getFile()
   await writeRaw(destParent, targetName, content)
   await srcParent.removeEntry(name)
 
-  return joinPath(targetFolderPath, targetName)
+  return to
 }
 
 // ---- Import ----------------------------------------------------------------
@@ -574,7 +701,13 @@ export async function moveNote(
 export interface ImportItem {
   /** e.g. "Archive/Projects/idea.md" — folders are created as needed. */
   path: string
-  content: string
+  /** A note's Markdown. */
+  content?: string
+  /**
+   * Any other file's bytes — a PDF, an image, a spreadsheet — stored as-is,
+   * under its own name and extension.
+   */
+  blob?: Blob
 }
 
 export interface ImportedNote {
@@ -582,14 +715,19 @@ export interface ImportedNote {
   title: string
   /** True when a name collision meant the note landed under a different name. */
   renamed: boolean
+  /** False for a file that isn't a note — a PDF, an image… */
+  isNote: boolean
 }
 
 /**
  * Sanitize an imported path: drop empty/traversal segments, strip characters
- * that aren't legal in a file name, and force a `.md` extension on the leaf.
- * Returns null if nothing usable is left.
+ * that aren't legal in a file name, and — for a note — force a `.md` extension
+ * on the leaf. Returns null if nothing usable is left.
  */
-function sanitizeImportPath(rawPath: string): { folder: string; name: string } | null {
+function sanitizeImportPath(
+  rawPath: string,
+  keepExtension = false,
+): { folder: string; name: string } | null {
   const segments = rawPath
     .replace(/\\/g, '/')
     .split('/')
@@ -600,6 +738,7 @@ function sanitizeImportPath(rawPath: string): { folder: string; name: string } |
   if (!segments.length) return null
 
   const leaf = segments.pop() as string
+  if (keepExtension) return { folder: segments.join('/'), name: leaf }
   const name = MD_EXT.test(leaf) ? leaf : `${leaf.replace(/\.(markdown|txt|text)$/i, '')}.md`
   return { folder: segments.join('/'), name }
 }
@@ -621,9 +760,9 @@ async function listFileNames(dir: FileSystemDirectoryHandle): Promise<Set<string
 /** The collision rule from `uniqueName`, applied against a name set in memory. */
 function uniqueNameIn(taken: Set<string>, desired: string): string {
   if (!taken.has(desired)) return desired
-  const base = baseName(desired)
+  const { stem, ext } = splitExt(desired)
   for (let i = 1; ; i++) {
-    const candidate = `${base} ${i}.md`
+    const candidate = `${stem} ${i}${ext}`
     if (!taken.has(candidate)) return candidate
   }
 }
@@ -647,7 +786,8 @@ export async function importNotes(
     target: string
     id: string
     renamed: boolean
-    content: string
+    content: string | Blob
+    isNote: boolean
   }
 
   const parents = new Map<string, FileSystemDirectoryHandle>()
@@ -655,7 +795,7 @@ export async function importNotes(
   const planned: Planned[] = []
 
   for (const item of items) {
-    const parts = sanitizeImportPath(item.path)
+    const parts = sanitizeImportPath(item.path, item.blob !== undefined)
     if (!parts) continue
 
     const folderPath = joinPath(targetFolder, parts.folder)
@@ -676,7 +816,8 @@ export async function importNotes(
       target,
       id: joinPath(folderPath, target),
       renamed: target !== parts.name,
-      content: item.content,
+      content: item.blob ?? item.content ?? '',
+      isNote: item.blob === undefined,
     })
   }
 
@@ -686,10 +827,11 @@ export async function importNotes(
     onProgress?.(++done, planned.length)
   })
 
-  return planned.map(({ id, target, renamed }) => ({
+  return planned.map(({ id, target, renamed, isNote }) => ({
     id,
-    title: baseName(target),
+    title: isNote ? baseName(target) : target,
     renamed,
+    isNote,
   }))
 }
 
@@ -760,6 +902,12 @@ export interface TrashItem {
   originalPath: string
   title: string
   deletedAt: number
+  /** Present for a file that isn't a note. */
+  kind?: 'file'
+  /** 'replaced' when a newer version, saved through the API, took its place. */
+  reason?: 'replaced'
+  /** The API token that deleted or replaced it, when it wasn't the app. */
+  by?: string
 }
 
 const TRASH_DIR = '.trash'
@@ -787,8 +935,9 @@ async function writeTrashIndex(
 }
 
 /**
- * Move one note into the bin folder and describe what moved. The index is the
- * caller's business, so a bulk delete can rewrite it once instead of per note.
+ * Move one note or file into the bin folder and describe what moved. The index
+ * is the caller's business, so a bulk delete can rewrite it once instead of per
+ * item. Bytes, not text, so a binary file comes back exactly as it went.
  */
 async function moveIntoTrash(
   dir: FileSystemDirectoryHandle,
@@ -797,16 +946,21 @@ async function moveIntoTrash(
   id: string,
 ): Promise<TrashItem> {
   const { name } = splitPath(id)
-  const content = await readNote(dir, id)
   const trashName = uniqueNameIn(taken, name)
   taken.add(trashName)
-  await writeRaw(trash, trashName, content)
-  await deleteNote(dir, id)
+  if (isRemoteHandle(dir)) {
+    await moveRemoteEntry(dir, id, joinPath(TRASH_DIR, trashName))
+  } else {
+    await writeRaw(trash, trashName, await readBlob(dir, id))
+    await deleteNote(dir, id)
+  }
+  const isNote = MD_EXT.test(name)
   return {
     trashName,
     originalPath: id,
-    title: baseName(name),
+    title: isNote ? baseName(name) : name,
     deletedAt: Date.now(),
+    ...(isNote ? {} : { kind: 'file' as const }),
   }
 }
 
@@ -852,15 +1006,16 @@ export async function restoreTrash(
   if (!entry) return null
 
   const trash = await dir.getDirectoryHandle(TRASH_DIR)
-  const content = await (
-    await (await trash.getFileHandle(trashName)).getFile()
-  ).text()
-
   const { parentPath, name } = splitPath(entry.originalPath)
   const parent = await getDirByPath(dir, parentPath, true)
   const target = await uniqueName(parent, name)
-  await writeRaw(parent, target, content)
-  await trash.removeEntry(trashName)
+  if (isRemoteHandle(dir)) {
+    await moveRemoteEntry(dir, joinPath(TRASH_DIR, trashName), joinPath(parentPath, target))
+  } else {
+    const content = await (await trash.getFileHandle(trashName)).getFile()
+    await writeRaw(parent, target, content)
+    await trash.removeEntry(trashName)
+  }
   await writeTrashIndex(
     dir,
     items.filter((i) => i.trashName !== trashName),
@@ -898,16 +1053,17 @@ export async function emptyTrash(
 }
 
 /**
- * Delete a folder: move every note inside it (recursively) to the recycle bin,
- * then remove the folder and any remaining (non-note) contents. Returns the
- * number of notes sent to the bin.
+ * Delete a folder: move everything inside it (recursively) — notes and other
+ * files alike — to the recycle bin, then remove the folder. Returns the number
+ * of items sent to the bin.
  */
 export async function trashFolder(
   dir: FileSystemDirectoryHandle,
   folderPath: string,
 ): Promise<number> {
   const folderHandle = await getDirByPath(dir, folderPath)
-  const notes = flattenFiles(await buildTree(folderHandle, folderPath))
+  const tree = await buildTree(folderHandle, folderPath)
+  const notes: LibraryFile[] = [...flattenFiles(tree), ...flattenAssets(tree)]
 
   // The index is read and rewritten once for the whole folder. Doing it inside
   // the loop meant deleting a folder of 200 notes parsed and re-serialised the
@@ -926,52 +1082,4 @@ export async function trashFolder(
   const parent = await getDirByPath(dir, parentPath)
   await parent.removeEntry(name, { recursive: true })
   return notes.length
-}
-
-// ---- Helpers used by the AI assistant -------------------------------------
-
-/** Create a folder at an exact path (creating intermediate folders). */
-export async function ensureFolder(
-  dir: FileSystemDirectoryHandle,
-  path: string,
-): Promise<void> {
-  await getDirByPath(dir, path, true)
-}
-
-/** Move/rename a note to an exact destination path (permanent, not trashed). */
-export async function movePath(
-  dir: FileSystemDirectoryHandle,
-  from: string,
-  to: string,
-): Promise<void> {
-  if (from === to) return
-  const content = await readNote(dir, from)
-
-  // On a case-insensitive filesystem (macOS default), a destination differing
-  // from the source only by case resolves to the *same* file — write-then-
-  // delete would destroy the note. Detect that and hop through a temp name,
-  // as renameNote does.
-  const { parentPath: fromParent, name: fromName } = splitPath(from)
-  const srcParent = await getDirByPath(dir, fromParent)
-  const src = await srcParent.getFileHandle(fromName)
-  const { parentPath: toParent, name: toName } = splitPath(to)
-  const destParent = await getDirByPath(dir, toParent, true)
-  let sameEntry = false
-  try {
-    sameEntry = await (await destParent.getFileHandle(toName)).isSameEntry(src)
-  } catch {
-    // Destination doesn't exist — free to use it.
-  }
-
-  if (sameEntry) {
-    const tempName = `.deckle-rename-${Date.now()}.md`
-    await writeRaw(destParent, tempName, content)
-    await srcParent.removeEntry(fromName)
-    await writeRaw(destParent, toName, content)
-    await destParent.removeEntry(tempName)
-    return
-  }
-
-  await writeNote(dir, to, content)
-  await deleteNote(dir, from)
 }

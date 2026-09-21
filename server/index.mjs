@@ -19,7 +19,10 @@
 //   DECKLE_TRUST_PROXY       reverse proxies in front, for client addresses
 //                            ("true" = one; a number = that many; default none)
 //   DECKLE_API_TOKENS        bearer tokens enabling the /api/v1 machine API
+//                            and the MCP server at /api/v1/mcp
 //   DECKLE_API_CORS_ORIGINS  origins allowed to call /api/v1 from a browser
+//   DECKLE_MAX_FILE_MB       largest single file the library accepts (default 100)
+//   DECKLE_PROJECTS_DIR      folder holding projects             (default Projects)
 //
 // The NIB_* names these replaced are still honoured; see legacy-env.mjs.
 
