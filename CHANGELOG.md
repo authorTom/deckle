@@ -8,12 +8,15 @@ here.
 
 ## [Unreleased]
 
-A change of direction, and a major release (3.0.0) when it is cut. Deckle
-stops being a note app with an AI assistant built in and becomes the knowledge
-base for an agent that lives elsewhere — Hermes, or anything else that speaks
-MCP or HTTP. The agent does the thinking; Deckle stores what it produces, shows
-it, searches it, and keeps a record of what it did. **Read Removed before
-upgrading** if you used the assistant.
+Nothing yet.
+
+## [3.0.0] — 2026-09-21
+
+A change of direction. Deckle stops being a note app with an AI assistant
+built in and becomes the knowledge base for an agent that lives elsewhere —
+Hermes, or anything else that speaks MCP or HTTP. The agent does the thinking;
+Deckle stores what it produces, shows it, searches it, and keeps a record of
+what it did. **Read Removed before upgrading** if you used the assistant.
 
 ### Added
 
@@ -551,7 +554,8 @@ a command palette; light and dark mode with seven palettes; a responsive layout
 with drawers on a phone; and a token-authenticated REST API at `/api/v1`
 described by a self-served OpenAPI 3.1 document.
 
-[Unreleased]: https://github.com/authorTom/deckle/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/authorTom/deckle/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/authorTom/deckle/compare/v2.0.0...v3.0.0
 [2.0.0]: https://github.com/authorTom/deckle/compare/v1.6.0...v2.0.0
 [1.6.0]: https://github.com/authorTom/deckle/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/authorTom/deckle/compare/v1.5.0...v1.5.1
