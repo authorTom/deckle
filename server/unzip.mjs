@@ -74,14 +74,24 @@ export function readZipEntries(
       localOffset + 30 + buffer.readUInt16LE(localOffset + 26) + buffer.readUInt16LE(localOffset + 28)
     const data = buffer.subarray(start, start + compressedSize)
 
+    let bytes
     if (method === 0) {
-      out.set(name, data)
+      bytes = data
     } else if (method === 8) {
-      // maxOutputLength makes a lying size field a throw, not a memory spike.
-      out.set(name, zlib.inflateRawSync(data, { maxOutputLength: maxEntryBytes }))
+      // Inflate no further than the declared size (plus one byte, to notice a
+      // lie). The total above is only honest if each entry really is the size
+      // it claims: otherwise a member declaring 0 bytes could inflate to the
+      // per-entry cap, as many times over as the archive has records.
+      try {
+        bytes = zlib.inflateRawSync(data, { maxOutputLength: Math.min(maxEntryBytes, size + 1) })
+      } catch {
+        throw new ZipError(`${name} is damaged or larger than it declares`)
+      }
     } else {
       throw new ZipError(`compression method ${method} is not supported`)
     }
+    if (bytes.length !== size) throw new ZipError(`${name} is not the size it declares`)
+    out.set(name, bytes)
   }
   return out
 }

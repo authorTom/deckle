@@ -38,6 +38,12 @@ const FALLBACK_VERSION = '2025-06-18'
 const MAX_INLINE_FILE_BYTES = 10 * 1024 * 1024
 const DEFAULT_READ_CHARS = 40_000
 const MAX_LIST_ENTRIES = 500
+/**
+ * Messages in one JSON-RPC batch. Every reply is held until the batch ends, and
+ * a `read` reply can carry 200,000 characters, so without a cap a few
+ * megabytes of requests — from a read-only token — could fill the heap.
+ */
+const MAX_BATCH = 50
 
 const INSTRUCTIONS = `Deckle is the user's knowledge base: plain Markdown notes and ordinary files in folders, which the user reads and reviews in the Deckle app. Treat it as long-term memory for your work.
 
@@ -677,6 +683,10 @@ export function createMcp({ library, store, search, activity, projects, libraryN
     if (Array.isArray(payload)) {
       if (!payload.length) {
         send(400, rpcError(null, -32600, 'empty batch'))
+        return
+      }
+      if (payload.length > MAX_BATCH) {
+        send(400, rpcError(null, -32600, `batch too large: at most ${MAX_BATCH} messages`))
         return
       }
       const replies = []

@@ -731,10 +731,13 @@ function sanitizeImportPath(
   const segments = rawPath
     .replace(/\\/g, '/')
     .split('/')
-    .filter((s) => s && s !== '.' && s !== '..')
-    // A dotfile segment would land the note somewhere buildTree skips.
+    // Cleaned first, then judged: removing illegal characters and trimming can
+    // expose a leading dot (":.trash" becomes ".trash") or a bare "..".
+    .map((s) => sanitizeName(s, ''))
+    // A dotfile segment would land the note somewhere buildTree skips — or in
+    // Deckle's own .trash, .history or .deckle — so its dots go too.
     .map((s) => sanitizeName(s.replace(/^\.+/, ''), ''))
-    .filter(Boolean)
+    .filter((s) => s && s !== '.' && s !== '..')
   if (!segments.length) return null
 
   const leaf = segments.pop() as string

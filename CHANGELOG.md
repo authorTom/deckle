@@ -8,7 +8,51 @@ here.
 
 ## [Unreleased]
 
-Nothing yet.
+Security fixes from an audit of 3.0. **Read Changed** if you run the server
+library without a password and reach it by a host name.
+
+### Changed
+
+- **Without a password, the library answers only hosts it knows.** Library
+  requests must be addressed to `localhost`, an IP address, or a name in the
+  new `DECKLE_ALLOWED_HOSTS` (comma-separated; `.example.com` for a whole
+  domain). Before, a web page you visited could point its own domain at your
+  Deckle (DNS rebinding) and read, change or delete your notes from inside
+  your network. If you open Deckle as `notes.example.com` or by a Tailscale
+  name with no password, add that name. Password-protected libraries are
+  unaffected.
+
+### Fixed
+
+- **An older `.env` that set `NIB_PASSWORD` no longer comes up open.**
+  `compose.yaml` passed only the `DECKLE_*` names into the container, so a
+  pre-rename `NIB_PASSWORD` never reached the server and an upgraded library
+  started with no password. The pre-rename password, session and API-token
+  names are now passed through.
+- **One hostile document can no longer stall or crash the server.** Text
+  extraction for search and MCP `read` now runs in a worker thread with a heap
+  cap and a time limit, and caches a failure so it isn't retried until the file
+  changes. The extractors themselves no longer trust declared ZIP sizes, pad
+  spreadsheet rows to a cell reference past Excel's last column, expand
+  OpenDocument space runs without limit, re-read one worksheet per sheet that
+  points at it, or slow down quadratically on long space runs and unclosed tags.
+- **MCP batches are capped at 50 messages.** A read-only token could
+  previously send one batch large enough to fill the server's memory.
+- **SVG files are no longer offered in a new tab.** The preview still shows
+  them; opened as a page of their own, their scripts would have depended on
+  the browser to keep them from running as Deckle.
+- **Deckle 2.x's leftovers are cleared from the browser.** The assistant's
+  settings — provider API keys, including ones a server library lent and
+  promised to forget at sign-out — and its index of notes stayed in browser
+  storage after the upgrade. They are now removed when the app loads.
+- **Imports can't write into Deckle's hidden folders.** A path such as
+  `:.trash/index.json` in an imported archive turned into `.trash/index.json`
+  once its illegal characters were removed, landing a forged recycle-bin or
+  history entry. Paths are now cleaned before they are checked.
+- **The reserved `.deckle-state` folder can't be reached by another
+  spelling.** On a case-insensitive library mount, `.deckle-ſtate` (with a
+  long s) or a symlink could open it; the check now folds Unicode and compares
+  the folder's identity on disk.
 
 ## [3.0.0] — 2026-09-21
 

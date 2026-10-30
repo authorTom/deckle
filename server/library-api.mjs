@@ -96,6 +96,17 @@ function tempNameFor(abs, kind) {
   )
 }
 
+/**
+ * A path for comparison against the reserved folder's. Lower case alone is
+ * not case folding: U+017F (ſ) is already lower case, yet a case-insensitive
+ * filesystem may treat it as "s". NFKC maps it, and other compatibility forms,
+ * to their plain letters, and the round trip through upper case catches the
+ * few that lower-casing leaves alone. Folding too much only over-refuses.
+ */
+function fold(p) {
+  return p.normalize('NFKC').toUpperCase().toLowerCase()
+}
+
 /** stat, or null when the entry vanished between a listing and the stat. */
 async function statOrNull(abs) {
   try {
@@ -123,18 +134,39 @@ export function createLibraryApi(
   // lives on a case-insensitive filesystem, where ".DECKLE-STATE" opens the
   // very folder this is guarding. Over-refusing a differently-cased folder on
   // Linux costs nothing.
-  const reserved = [path.join(root, RESERVED_DIR), ...reservedPaths.map((p) => path.resolve(p))]
-    .map((p) => p.toLowerCase())
+  const reservedAbs = [path.join(root, RESERVED_DIR), ...reservedPaths.map((p) => path.resolve(p))]
+  const reserved = reservedAbs.map(fold)
 
   function isReserved(abs) {
-    const probe = abs.toLowerCase()
+    const probe = fold(abs)
     return reserved.some((r) => probe === r || probe.startsWith(r + path.sep))
   }
 
   /** Would removing `abs` take a reserved folder with it? */
   function holdsReserved(abs) {
-    const probe = abs.toLowerCase()
+    const probe = fold(abs)
     return reserved.some((r) => r === probe || r.startsWith(probe + path.sep))
+  }
+
+  /**
+   * Is `abs`, or any folder above it inside the library, the reserved folder
+   * itself — whatever it was called to get there? Filesystems differ in which
+   * names they treat as the same, so the string check above can only ever
+   * approximate this; comparing device and inode is the answer the
+   * filesystem itself gives.
+   */
+  async function insideReservedByIdentity(abs) {
+    const ids = new Set()
+    for (const r of reservedAbs) {
+      const stat = await statOrNull(r)
+      if (stat) ids.add(`${stat.dev}:${stat.ino}`)
+    }
+    if (!ids.size) return false
+    for (let probe = abs; probe !== root && probe.startsWith(root + path.sep); probe = path.dirname(probe)) {
+      const stat = await statOrNull(probe)
+      if (stat && ids.has(`${stat.dev}:${stat.ino}`)) return true
+    }
+    return false
   }
 
   /**
@@ -151,6 +183,9 @@ export function createLibraryApi(
       throw new BadPathError(`${RESERVED_DIR} is reserved`)
     }
     await assertRealPathInside(root, abs)
+    if (await insideReservedByIdentity(abs)) {
+      throw new BadPathError(`${RESERVED_DIR} is reserved`)
+    }
     return abs
   }
 

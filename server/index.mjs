@@ -14,6 +14,8 @@
 //                            (default <DECKLE_LIBRARY_DIR>/.deckle-state)
 //   DECKLE_LIBRARY_NAME      display name shown in the app  (default "My Notes")
 //   DECKLE_PASSWORD          password gating the library; unset = open access
+//   DECKLE_ALLOWED_HOSTS     without a password, extra host names the library
+//                            answers to (localhost and IPs always do)
 //   DECKLE_SESSION_SECRET    keeps sessions valid across restarts
 //   DECKLE_SESSION_TTL_DAYS  session lifetime                     (default 30)
 //   DECKLE_TRUST_PROXY       reverse proxies in front, for client addresses

@@ -45,6 +45,11 @@ services:
       # something else already guards the port (a VPN, Tailscale, or a reverse
       # proxy that authenticates).
       DECKLE_PASSWORD: "${DECKLE_PASSWORD:-}"
+      # Reached by a host name rather than localhost or an IP address, with no
+      # password? Name it here (comma-separated; ".example.com" for a whole
+      # domain) — without a password, the server only answers library requests
+      # addressed to hosts it knows, which is what stops DNS rebinding.
+      DECKLE_ALLOWED_HOSTS: "${DECKLE_ALLOWED_HOSTS:-}"
       # Optional: keeps sign-ins valid across restarts. Without it, a restart
       # generates a new signing key and everyone signs in again.
       DECKLE_SESSION_SECRET: "${DECKLE_SESSION_SECRET:-}"
@@ -65,6 +70,16 @@ services:
       DECKLE_PROJECTS_DIR: "${DECKLE_PROJECTS_DIR:-}"
       # Activity and project-log times use this zone; unset, they are UTC.
       TZ: "${TZ:-}"
+      # The names this configuration had before the rename (Nib). Compose only
+      # passes on what is listed here, so an older .env that still says
+      # NIB_PASSWORD would otherwise come up with no password at all.
+      # server/legacy-env.mjs maps them; a DECKLE_* name that is set wins.
+      NIB_PASSWORD: "${NIB_PASSWORD:-}"
+      NIB_SESSION_SECRET: "${NIB_SESSION_SECRET:-}"
+      NIB_SESSION_TTL_DAYS: "${NIB_SESSION_TTL_DAYS:-}"
+      NIB_API_TOKENS: "${NIB_API_TOKENS:-}"
+      NIB_API_TOKEN: "${NIB_API_TOKEN:-}"
+      NIB_API_CORS_ORIGINS: "${NIB_API_CORS_ORIGINS:-}"
 
     volumes:
       # Your notes. A named volume survives `docker compose down` and image

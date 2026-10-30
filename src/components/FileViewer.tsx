@@ -43,7 +43,7 @@ type Preview =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
   | { kind: 'none'; reason: string }
-  | { kind: 'url'; url: string; as: 'image' | 'pdf' | 'audio' | 'video' }
+  | { kind: 'url'; url: string; as: 'image' | 'pdf' | 'audio' | 'video'; openable: boolean }
   | { kind: 'doc'; blocks: DocBlock[] }
   | { kind: 'sheets'; sheets: Sheet[] }
   | { kind: 'slides'; slides: Slide[] }
@@ -58,7 +58,11 @@ async function buildPreview(file: AssetFile, blob: Blob): Promise<Preview> {
     // Typed by extension, never sniffed, so only these four kinds of thing are
     // ever handed to the browser to render.
     const url = URL.createObjectURL(new Blob([blob], { type: mime }))
-    return { kind: 'url', url, as: family }
+    // An SVG is a document that can carry script. Inside an <img> it can't
+    // run; opened as a page of its own from a blob URL — which shares this
+    // app's origin — only the browser's CSP inheritance would stop it. So it
+    // is shown, never offered as a tab.
+    return { kind: 'url', url, as: family, openable: mime !== 'image/svg+xml' }
   }
 
   const textual = ['csv', 'json', 'text', 'code'].includes(family)
@@ -354,7 +358,7 @@ export default function FileViewer({
             )}
           </div>
           <div className="file-viewer-actions">
-            {preview.kind === 'url' && (
+            {preview.kind === 'url' && preview.openable && (
               <a
                 className="icon-btn"
                 href={preview.url}

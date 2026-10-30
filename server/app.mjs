@@ -25,6 +25,7 @@ import { createActivityLog } from './activity.mjs'
 import { createProjects } from './projects.mjs'
 import { createMcp } from './mcp.mjs'
 import { BadPathError } from './paths.mjs'
+import { createHostCheck } from './hosts.mjs'
 import { resolveLegacyEnv } from './legacy-env.mjs'
 import { parseTrustProxy } from './throttle.mjs'
 import { VERSION } from './version.mjs'
@@ -91,6 +92,7 @@ export function createApp(rawEnv = process.env, { log = console.log, warn = cons
   }
 
   const auth = createAuth(env)
+  const hostCheck = createHostCheck(env)
   const library = createLibraryApi(config.libraryDir, {
     reservedPaths: [config.stateDir],
     maxFileBytes: config.maxFileBytes,
@@ -246,6 +248,14 @@ export function createApp(rawEnv = process.env, { log = console.log, warn = cons
     }
     if (!hasAppHeader(req)) {
       sendJson(res, 403, { error: 'forbidden' })
+      return true
+    }
+    // Without a password the header above is the only gate, and a DNS-rebound
+    // page can send it; see hosts.mjs.
+    if (!auth.required && !hostCheck.allows(req)) {
+      sendJson(res, 403, {
+        error: 'unknown host — add it to DECKLE_ALLOWED_HOSTS, or set DECKLE_PASSWORD',
+      })
       return true
     }
     if (!auth.isAuthenticated(req)) {
@@ -420,6 +430,11 @@ export function createApp(rawEnv = process.env, { log = console.log, warn = cons
           ? '[deckle] server library is password protected'
           : '[deckle] WARNING: server library has no password (DECKLE_PASSWORD unset) — anyone who can reach this port can read and write your notes',
       )
+      if (!auth.required && !hostCheck.allowAll) {
+        log(
+          `[deckle] without a password the library answers only localhost, IP addresses${hostCheck.allowed.length ? ` and ${hostCheck.allowed.join(', ')}` : ''} (DECKLE_ALLOWED_HOSTS)`,
+        )
+      }
     } else {
       log('[deckle] server library disabled (set DECKLE_SERVER_LIBRARY=true to enable)')
     }
