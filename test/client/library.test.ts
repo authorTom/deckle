@@ -121,6 +121,22 @@ describe('importNotes', () => {
     expect(await get(dir, 'Imported/dup.md')).toBe('already here')
     expect((await listAll(dir)).every((p) => p.startsWith('Imported/'))).toBe(true)
   })
+
+  it('never writes into a hidden folder, whatever a segment hides its dot behind', async () => {
+    const dir = createMemFs()
+    const imported = await library.importNotes(
+      dir,
+      [
+        { path: ':.trash/index.md', content: 't' },
+        { path: ' .history/y.md', content: 'h' },
+        { path: '*.deckle/tasks.md', content: 'd' },
+        { path: ':../escape.md', content: 'e' },
+      ],
+      '',
+    )
+    expect(imported.map((n) => n.id)).toEqual(['trash/index.md', 'history/y.md', 'deckle/tasks.md', 'escape.md'])
+    expect((await listAll(dir)).some((p) => p.split('/').some((s) => s.startsWith('.')))).toBe(false)
+  })
 })
 
 describe('recycle bin', () => {

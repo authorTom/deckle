@@ -324,6 +324,7 @@ Only relevant when the server library is enabled.
 | --- | --- | --- |
 | `DECKLE_SERVER_LIBRARY` | *(off)* | `true` enables the server library |
 | `DECKLE_PASSWORD` | *(none)* | Password for the library. **Blank means no password at all** |
+| `DECKLE_ALLOWED_HOSTS` | *(none)* | Without a password, the host names the library answers to besides localhost and IP addresses — comma-separated, `.example.com` for a whole domain, `*` for any. See [Security notes](#security-notes) |
 | `DECKLE_LIBRARY_NAME` | `My Notes` | Name shown in the app |
 | `DECKLE_SESSION_SECRET` | *(random)* | Fixed cookie-signing key, so restarts don't sign everyone out |
 | `DECKLE_SESSION_TTL_DAYS` | `30` | How long a sign-in lasts |
@@ -610,6 +611,13 @@ Relevant when you enable the server library.
   can read and write every note. That is only reasonable behind a VPN,
   Tailscale, or a reverse proxy that authenticates — the server logs a warning
   at startup when it happens.
+- **Without a password, the library answers only hosts it knows.** A web page
+  you visit could otherwise point its own domain at your Deckle (DNS rebinding)
+  and read your notes from inside your network. So with no password, library
+  requests must be addressed to `localhost`, an IP address, or a name listed in
+  `DECKLE_ALLOWED_HOSTS` — set it if you reach Deckle by name, such as
+  `notes.example.com` or `.your-tailnet.ts.net`. A password makes this
+  unnecessary, and it is not applied then.
 - **How signing in works.** The password is checked in constant time and
   exchanged for a signed, `HttpOnly`, `SameSite=Strict` session cookie — it
   isn't stored in the browser and isn't sent again after sign-in. Repeated

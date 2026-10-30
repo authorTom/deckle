@@ -38,7 +38,11 @@ const SKIP_FOLDERS = new Set(['node_modules', '__pycache__', 'venv', '.venv'])
  * knowledge base — as do dependency caches.
  */
 function isSkippedPath(path: string): boolean {
-  return path.split('/').some((segment) => segment.startsWith('.') || SKIP_FOLDERS.has(segment))
+  return path.split('/').some((raw) => {
+    // As the import will clean it: ":.git" and " .env" are hidden too.
+    const segment = raw.replace(/[\\/:*?"<>|]/g, '').trim()
+    return segment.startsWith('.') || SKIP_FOLDERS.has(segment)
+  })
 }
 
 function megabytes(bytes: number): string {

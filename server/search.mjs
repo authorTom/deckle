@@ -9,9 +9,11 @@
 // cheap signature over every entry's path, mtime and size, so repeated
 // searches against an unchanged library cost nothing but the scoring pass.
 // Extracted document text is cached per file version, so a rebuild after one
-// new note doesn't re-read every spreadsheet in the library.
+// new note doesn't re-read every spreadsheet in the library. Extraction runs in
+// a worker thread (extract-worker.mjs), so a hostile document fails alone.
 
-import { extractText, isExtractable, MAX_EXTRACT_SOURCE_BYTES } from './extract.mjs'
+import { isExtractable, MAX_EXTRACT_SOURCE_BYTES } from './extract.mjs'
+import { createExtractor } from './extract-worker.mjs'
 
 const K1 = 1.2
 const B = 0.75
@@ -57,7 +59,13 @@ function folderOf(id) {
   return id.includes('/') ? id.slice(0, id.lastIndexOf('/')) : ''
 }
 
-export function createSearch(library) {
+/**
+ * @param {object} library
+ * @param {{ extract?: (buffer: Buffer, name: string) => Promise<string | null> }} [options]
+ *   extract: how a file's text is pulled out; a worker-thread extractor unless
+ *   a test supplies its own.
+ */
+export function createSearch(library, { extract = createExtractor().extract } = {}) {
   let cache = null // { signature, docs, df, avgLength }
   /** Extracted text by `id:mtime:size`, so an unchanged file is read once. */
   const extracted = new Map()
@@ -82,10 +90,12 @@ export function createSearch(library) {
     if (hit !== undefined) return hit
     let text = ''
     try {
-      text = extractText(await library.readBuffer(node.id), node.name) ?? ''
+      text = (await extract(await library.readBuffer(node.id), node.name)) ?? ''
     } catch {
       // Gone, or unreadable: nothing to index.
     }
+    // Cached even when empty — a document that timed out or ran out of memory
+    // in the worker is not retried until the file itself changes.
     extracted.set(key, text)
     return text
   }

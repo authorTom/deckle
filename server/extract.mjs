@@ -38,6 +38,10 @@ export const MAX_EXTRACT_SOURCE_BYTES = 25 * 1024 * 1024
 export const MAX_EXTRACT_CHARS = 400_000
 
 const MAX_SHEET_ROWS = 2000
+/** Excel's last column is XFD, the 16,384th. */
+const MAX_SHEET_COLUMNS = 16_384
+/** A run of spaces in an OpenDocument file is one element with a count. */
+const MAX_SPACE_RUN = 100
 
 export function extensionOf(name) {
   const dot = name.lastIndexOf('.')
@@ -68,11 +72,36 @@ function decodeEntities(text) {
 }
 
 function tidy(text) {
+  // Line by line rather than /[ \t]+\n/g: that regex backtracks over a long
+  // run of spaces with no newline after it, and the text here comes from a
+  // document anyone could have written.
   return text
-    .replace(/[ \t]+\n/g, '\n')
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
     .slice(0, MAX_EXTRACT_CHARS)
+}
+
+/**
+ * Every `open … close` span in `xml`, in order — what a lazy
+ * /<open>[\s\S]*?<\/close>/g match finds, but by indexOf. The regex searches
+ * to the end of the text for each opening tag that is never closed, which a
+ * crafted document can repeat until the scan is quadratic; here an unclosed
+ * tag simply ends the list. `open` must be a global regex.
+ */
+function blocks(xml, open, close, limit = Infinity) {
+  const out = []
+  open.lastIndex = 0
+  let m
+  while (out.length < limit && (m = open.exec(xml))) {
+    const end = xml.indexOf(close, m.index)
+    if (end === -1) break
+    out.push(xml.slice(m.index, end + close.length))
+    open.lastIndex = end + close.length
+  }
+  return out
 }
 
 // ---- Word ------------------------------------------------------------------
@@ -94,17 +123,22 @@ function docxText(documentXml) {
   const body = documentXml.replace(/^[\s\S]*?<w:body>/, '').replace(/<\/w:body>[\s\S]*$/, '')
   const lines = []
   // Tables first become rows of cells, so their paragraphs aren't read twice.
-  const withTables = body.replace(/<w:tbl>[\s\S]*?<\/w:tbl>/g, (table) => {
-    const rows = table.match(/<w:tr[\s>][\s\S]*?<\/w:tr>/g) ?? []
-    const text = rows
+  let withTables = ''
+  let rest = 0
+  for (const table of blocks(body, /<w:tbl>/g, '</w:tbl>')) {
+    const at = body.indexOf(table, rest)
+    const text = blocks(table, /<w:tr[\s>]/g, '</w:tr>')
       .map((row) =>
-        (row.match(/<w:tc[\s>][\s\S]*?<\/w:tc>/g) ?? [])
+        blocks(row, /<w:tc[\s>]/g, '</w:tc>')
           .map((cell) => wordRuns(cell).replace(/\s+/g, ' ').trim())
           .join(' | '),
       )
       .join('\n')
-    return `<w:p><w:r><w:t>${text.replace(/[<&]/g, (c) => (c === '<' ? '&lt;' : '&amp;'))}</w:t></w:r></w:p>`
-  })
+    withTables += body.slice(rest, at)
+    withTables += `<w:p><w:r><w:t>${text.replace(/[<&]/g, (c) => (c === '<' ? '&lt;' : '&amp;'))}</w:t></w:r></w:p>`
+    rest = at + table.length
+  }
+  withTables += body.slice(rest)
   for (const paragraph of withTables.split(/<\/w:p>/)) {
     const text = wordRuns(paragraph)
     if (!text.trim()) {
@@ -122,28 +156,48 @@ function docxText(documentXml) {
 
 // ---- Excel -----------------------------------------------------------------
 
+/** A cell reference's zero-based column, or -1 past Excel's last column. */
 function columnIndex(ref) {
-  const letters = /^[A-Z]+/.exec(ref)?.[0] ?? 'A'
+  const letters = /^[A-Z]{1,3}(?=\d)/.exec(ref)?.[0]
+  if (!letters) return -1
   let n = 0
   for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64)
-  return n - 1
+  return n <= MAX_SHEET_COLUMNS ? n - 1 : -1
+}
+
+/** A row's cells, self-closing (empty) ones included, scanned by indexOf. */
+function cellsOf(row) {
+  const out = []
+  const open = /<c[\s>\/]/g
+  let m
+  while ((m = open.exec(row))) {
+    const tagEnd = row.indexOf('>', m.index)
+    if (tagEnd === -1) break
+    if (row[tagEnd - 1] === '/') {
+      out.push(row.slice(m.index, tagEnd + 1))
+      open.lastIndex = tagEnd + 1
+      continue
+    }
+    const end = row.indexOf('</c>', tagEnd)
+    if (end === -1) break
+    out.push(row.slice(m.index, end + 4))
+    open.lastIndex = end + 4
+  }
+  return out
 }
 
 function sharedStrings(xml) {
   if (!xml) return []
-  return (xml.match(/<si>[\s\S]*?<\/si>/g) ?? []).map((si) =>
-    decodeEntities((si.match(/<t(?:\s[^>]*)?>([^<]*)<\/t>/g) ?? []).map((t) => t.replace(/<[^>]+>/g, '')).join('')),
+  return blocks(xml, /<si>/g, '</si>').map((si) =>
+    decodeEntities((si.match(/<t(?:\s[^>]*)?>([^<]*)<\/t>/g) ?? []).map((t) => t.replace(/<[^<>]*>/g, '')).join('')),
   )
 }
 
 function sheetRows(xml, strings) {
   const rows = []
-  for (const row of xml.match(/<row[\s>][\s\S]*?<\/row>/g) ?? []) {
-    if (rows.length >= MAX_SHEET_ROWS) break
+  for (const row of blocks(xml, /<row[\s>]/g, '</row>', MAX_SHEET_ROWS)) {
     const cells = []
-    // Self-closing (empty) cells first, or the lazy match would run on into
-    // the next cell's content.
-    for (const cell of row.match(/<c\s[^>]*\/>|<c[\s>][\s\S]*?<\/c>/g) ?? []) {
+    for (const cell of cellsOf(row)) {
       const ref = /\sr="([A-Z]+\d+)"/.exec(cell)?.[1]
       const type = /\st="([^"]+)"/.exec(cell)?.[1]
       const raw = /<v>([^<]*)<\/v>/.exec(cell)?.[1]
@@ -153,6 +207,8 @@ function sheetRows(xml, strings) {
       else if (type === 'b') value = raw === '1' ? 'TRUE' : 'FALSE'
       else if (raw !== undefined) value = decodeEntities(raw)
       const index = ref ? columnIndex(ref) : cells.length
+      // A reference past the last column is not a cell any spreadsheet wrote.
+      if (index < 0) continue
       while (cells.length < index) cells.push('')
       cells[index] = value.replace(/\s+/g, ' ').trim()
     }
@@ -174,10 +230,15 @@ function xlsxText(entries) {
     if (id && target) targets.set(id, target.replace(/^\/?(xl\/)?/, 'xl/'))
   }
   const parts = []
+  // Each worksheet is read once, however many <sheet> entries point at it.
+  const seen = new Set()
   for (const sheet of workbook.match(/<sheet\s[^>]*>/g) ?? []) {
     const name = decodeEntities(/\sname="([^"]*)"/.exec(sheet)?.[1] ?? 'Sheet')
     const rid = /\sr:id="([^"]+)"/.exec(sheet)?.[1]
-    const xml = rid ? text(targets.get(rid) ?? '') : undefined
+    const target = rid ? targets.get(rid) : undefined
+    if (!target || seen.has(target)) continue
+    seen.add(target)
+    const xml = text(target)
     if (!xml) continue
     const rows = sheetRows(xml, strings)
     parts.push(`## ${name}\n\n${rows.join('\n')}`)
@@ -198,7 +259,7 @@ function pptxText(entries) {
       .split(/<\/a:p>/)
       .map((p) =>
         decodeEntities(
-          (p.match(/<a:t(?:\s[^>]*)?>[^<]*<\/a:t>/g) ?? []).map((t) => t.replace(/<[^>]+>/g, '')).join(''),
+          (p.match(/<a:t(?:\s[^>]*)?>[^<]*<\/a:t>/g) ?? []).map((t) => t.replace(/<[^<>]*>/g, '')).join(''),
         ),
       )
       .filter((p) => p.trim())
@@ -216,10 +277,14 @@ function odfText(contentXml) {
       body
         .replace(/<text:tab\/>/g, '\t')
         .replace(/<text:line-break\/>/g, '\n')
-        .replace(/<text:s(?:\s+text:c="(\d+)")?\/>/g, (_, n) => ' '.repeat(Number(n ?? 1)))
+        .replace(/<text:s(?:\s+text:c="(\d+)")?\/>/g, (_, n) =>
+          ' '.repeat(Math.min(MAX_SPACE_RUN, Number(n ?? 1))),
+        )
         .replace(/<\/table:table-cell>/g, ' | ')
         .replace(/<\/(?:text:p|text:h|table:table-row)>/g, '\n')
-        .replace(/<[^>]+>/g, ''),
+        // [^<>], not [^>]: a run of '<' with no '>' would otherwise make
+        // every '<' rescan to the end of the text.
+        .replace(/<[^<>]*>/g, ''),
     ),
   )
 }
