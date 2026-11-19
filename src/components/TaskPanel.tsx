@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import {
   Activity,
   Bookmark,
+  Bot,
   CalendarDays,
   CheckCircle2,
   ChevronDown,
@@ -20,7 +21,7 @@ import {
 import BookmarkList from './BookmarkList'
 
 /** The things the left panel can be showing. */
-export type PanelTab = 'projects' | 'activity' | 'tasks' | 'bookmarks'
+export type PanelTab = 'projects' | 'agents' | 'activity' | 'tasks' | 'bookmarks'
 import MiniCalendar from './MiniCalendar'
 import TaskItem from './TaskItem'
 import { timeAgo } from '../lib/format'
@@ -43,10 +44,15 @@ interface TaskPanelProps {
   activity: ReactNode
   /** Agent changes since the person last looked, counted on the Activity tab. */
   activityUnseen: number
+  /** The Agents tab's content: briefs and the agents working them. */
+  agents: ReactNode
+  /** Briefs waiting on the person — an answer or a review — counted on the Agents tab. */
+  agentsCount: number
 }
 
 const TABS: { id: PanelTab; label: string; Icon: typeof Activity }[] = [
   { id: 'projects', label: 'Projects', Icon: FolderKanban },
+  { id: 'agents', label: 'Agents', Icon: Bot },
   { id: 'activity', label: 'Activity', Icon: Activity },
   { id: 'tasks', label: 'Tasks', Icon: ListTodo },
   { id: 'bookmarks', label: 'Bookmarks', Icon: Bookmark },
@@ -73,6 +79,8 @@ export default function TaskPanel({
   projects,
   activity,
   activityUnseen,
+  agents,
+  agentsCount,
 }: TaskPanelProps) {
   const [view, setView] = useState('inbox')
   const [selectedDate, setSelectedDate] = useState(todayStr)
@@ -399,7 +407,7 @@ export default function TaskPanel({
   return (
     <aside className="task-panel">
       <div className="task-header">
-        {/* Four tabs don't fit a narrow panel with every label showing, so an
+        {/* Five tabs don't fit a narrow panel with every label showing, so an
             inactive tab keeps its icon and gives its name as a tooltip — until
             the panel is widened enough to hold them all (see global.css). */}
         <div className="panel-tabs" role="tablist" aria-label="Panel">
@@ -412,17 +420,23 @@ export default function TaskPanel({
               className={`panel-tab${tab === id ? ' active' : ''}`}
               onClick={() => onTabChange(id)}
               title={label}
-              aria-label={
-                id === 'activity' && activityUnseen
-                  ? `${label}, ${activityUnseen} new`
-                  : label
-              }
             >
-              <Icon size={15} />
+              {/* The name comes from what is shown — the label (hidden from
+                  sight on a narrow panel, never from a screen reader) and the
+                  count — with the count's meaning spelled out unseen, so the
+                  name always contains the visible text. */}
+              <Icon size={15} aria-hidden="true" />
               <span className="panel-tab-label">{label}</span>
               {id === 'activity' && activityUnseen > 0 && (
-                <span className="panel-tab-count" aria-hidden="true">
+                <span className="panel-tab-count">
                   {activityUnseen > 99 ? '99+' : activityUnseen}
+                  <span className="visually-hidden"> new</span>
+                </span>
+              )}
+              {id === 'agents' && agentsCount > 0 && (
+                <span className="panel-tab-count">
+                  {agentsCount > 99 ? '99+' : agentsCount}
+                  <span className="visually-hidden"> waiting on you</span>
                 </span>
               )}
             </button>
@@ -440,6 +454,8 @@ export default function TaskPanel({
       </div>
 
       {tab === 'projects' && projects}
+
+      {tab === 'agents' && agents}
 
       {tab === 'activity' && activity}
 

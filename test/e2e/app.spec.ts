@@ -196,3 +196,57 @@ test('the first screen does not wait for the editor', async ({ page }) => {
   expect(scripts.some((s) => /languages-/.test(s))).toBe(false)
 })
 
+
+test('a brief written in the app is worked by an agent over MCP, then approved', async ({ page }) => {
+  await openLibrary(page)
+  await mcp(page, 'create_project', { name: 'Brief trial', summary: 'End-to-end briefs' })
+  // Other tests leave briefs in the shared library; this one is the most urgent, so it is taken first.
+
+  await page.keyboard.press('ControlOrMeta+k')
+  const palette = page.getByRole('dialog', { name: 'Command palette' })
+  await palette.getByRole('combobox').fill('new brief')
+  await page.keyboard.press('Enter')
+  const dialog = page.getByRole('dialog', { name: 'New brief' })
+  await expect(dialog).toBeVisible()
+  // The project arrives over the live stream; the form lists it once it has.
+  await expect(dialog.getByLabel('Project').locator('option', { hasText: 'Brief trial' })).toHaveCount(1)
+  await dialog.getByLabel('Project').selectOption('Brief trial')
+  await dialog.getByLabel('Title').fill('Price check')
+  await dialog.getByLabel('Instructions').fill('Check the prices in the attached sheet.')
+  await dialog.locator('input[type=file]').setInputFiles({ name: 'prices.csv', mimeType: 'text/csv', buffer: Buffer.from('item,price\nA,1') })
+  await expect(dialog.getByText('prices.csv')).toBeVisible()
+  await dialog.getByLabel('.docx').check()
+  await dialog.getByLabel('Priority').selectOption('1')
+  await dialog.getByRole('button', { name: 'Queue' }).click()
+  await expect(dialog).toBeHidden()
+
+  const card = page.locator('.brief-card', { hasText: 'Price check' })
+  await expect(card).toBeVisible()
+  await expect(card.locator('.brief-status')).toHaveText('Queued')
+
+  // The agent's side.
+  const claimed = await mcp(page, 'next_brief', {})
+  expect(claimed).toContain('You have taken the brief "Price check"')
+  expect(claimed).toContain('Context/prices.csv')
+  expect(claimed).toContain('expected outputs: docx')
+  const id = claimed.match(/^id: (.+)$/m)![1]
+  await mcp(page, 'report_progress', { brief: id, entry: 'Reading the sheet.' })
+  await expect(card.locator('.brief-status')).toHaveText('Running', { timeout: 5_000 })
+  await mcp(page, 'deliver_file', { brief: id, name: 'Price check.md', content: '# Prices\n\nAll fine.' })
+  await mcp(page, 'complete_brief', { brief: id, summary: 'Prices are all fine.' })
+
+  // Live, and waiting on the person.
+  await expect(card.locator('.brief-status')).toHaveText('Ready for review', { timeout: 5_000 })
+  await expect(page.getByRole('tab', { name: /^Agents \d+ waiting on you$/ })).toBeVisible()
+  await expect(card.getByRole('button', { name: 'Price check.md' })).toBeVisible()
+  await expect(card.locator('.brief-log')).toContainText('Prices are all fine.')
+
+  await card.getByRole('button', { name: 'Approve' }).click()
+  await expect(page.locator('.brief-card', { hasText: 'Price check' })).toHaveCount(0)
+  await page.getByRole('button', { name: /^Finished/ }).click()
+  await expect(page.locator('.brief-card', { hasText: 'Price check' }).locator('.brief-status')).toHaveText('Done')
+
+  const detail = await api(page, `/briefs/detail?id=${encodeURIComponent(id)}`)
+  expect(detail.status).toBe('done')
+  expect(detail.runLog).toContain('· you — **Approved.**')
+})

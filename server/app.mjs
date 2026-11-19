@@ -24,6 +24,7 @@ import { createLibraryStore } from './library-store.mjs'
 import { createActivityLog } from './activity.mjs'
 import { createProjects } from './projects.mjs'
 import { createMcp } from './mcp.mjs'
+import { createBriefs } from './briefs.mjs'
 import { BadPathError } from './paths.mjs'
 import { createHostCheck } from './hosts.mjs'
 import { resolveLegacyEnv } from './legacy-env.mjs'
@@ -63,6 +64,20 @@ function readPort(raw) {
 }
 
 /**
+ * How long an agent may go without reporting progress on a brief before it
+ * goes back to the queue. Thirty minutes suits a scheduled job that reports
+ * after each step; an agent that runs long silent steps needs longer.
+ */
+function readLeaseMinutes(raw) {
+  if (raw === undefined || raw === '') return 30
+  const minutes = Number(raw)
+  if (!Number.isFinite(minutes) || minutes < 1 || minutes > 24 * 60) {
+    throw new Error(`DECKLE_BRIEF_LEASE_MINUTES must be between 1 and 1440, got "${raw}"`)
+  }
+  return minutes
+}
+
+/**
  * Build the application from an environment.
  *
  * Reads configuration through the compatibility shim, never from process.env
@@ -88,6 +103,7 @@ export function createApp(rawEnv = process.env, { log = console.log, warn = cons
     trustProxy: parseTrustProxy(env.DECKLE_TRUST_PROXY),
     maxFileBytes: readMaxFileBytes(env.DECKLE_MAX_FILE_MB),
     projectsDir: readProjectsDir(env.DECKLE_PROJECTS_DIR),
+    briefLeaseMs: readLeaseMinutes(env.DECKLE_BRIEF_LEASE_MINUTES) * 60_000,
     legacyEnv,
   }
 
@@ -107,6 +123,7 @@ export function createApp(rawEnv = process.env, { log = console.log, warn = cons
   const search = createSearch(library)
   const activity = createActivityLog(library, { projectsDir: config.projectsDir })
   const projects = createProjects({ library, store, projectsDir: config.projectsDir })
+  const briefs = createBriefs({ library, store, projects, leaseMs: config.briefLeaseMs })
   const handleApi = createApi({
     library,
     store,
@@ -118,9 +135,11 @@ export function createApp(rawEnv = process.env, { log = console.log, warn = cons
       search,
       activity,
       projects,
+      briefs,
       libraryName: config.libraryName,
       maxFileBytes: config.maxFileBytes,
     }),
+    briefs,
     auth: apiAuth,
     libraryEnabled: config.libraryEnabled,
     libraryName: config.libraryName,

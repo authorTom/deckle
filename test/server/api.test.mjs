@@ -91,6 +91,8 @@ describe('/api/v1', () => {
       const { body } = await api('/openapi.json')
       expect(body.openapi).toMatch(/^3\.1/)
       expect(body.paths).toHaveProperty('/notes/{path}')
+      expect(body.paths).toHaveProperty(['/briefs/claim', 'post'])
+      expect(body.components.schemas).toHaveProperty('Brief')
     })
   })
 

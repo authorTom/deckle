@@ -27,12 +27,12 @@ const OVERVIEW_CANDIDATES = [OVERVIEW, 'README.md', 'Readme.md', 'readme.md', 'i
 export const STATUSES = ['active', 'paused', 'done', 'archived']
 
 /** "2026-09-21" in the server's local time (set TZ on the container). */
-function dateStamp(date) {
+export function dateStamp(date) {
   const pad = (n) => String(n).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
-function timeStamp(date) {
+export function timeStamp(date) {
   const pad = (n) => String(n).padStart(2, '0')
   return `${dateStamp(date)} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
@@ -52,6 +52,19 @@ function validateStatus(status) {
     throw new ApiError(400, 'invalid_body', `"status" must be one of ${STATUSES.join(', ')}`)
   }
   return status
+}
+
+/**
+ * One dated entry for a Log.md or a brief's Run.md. Continuation lines are
+ * indented so a multi-line entry stays one list item.
+ */
+export function logLine(text, actor, date) {
+  const [first, ...rest] = String(text).trim().split(/\r?\n/)
+  return (
+    `- **${timeStamp(date)}**${actor ? ` · ${actor}` : ''} — ${first}` +
+    rest.map((l) => `\n  ${l}`).join('') +
+    '\n'
+  )
 }
 
 /** Quote a one-line summary for front matter. */
@@ -208,12 +221,7 @@ export function createProjects({ library, store, now = () => new Date(), project
     if (text.length > 20_000) throw new ApiError(400, 'invalid_body', '"entry" is too long')
     const path = `${project.path}/${LOG}`
     const exists = (await library.exists(path)) === 'file'
-    // Continuation lines are indented so a multi-line entry stays one list item.
-    const [first, ...rest] = text.split(/\r?\n/)
-    const line =
-      `- **${timeStamp(now())}**${actor ? ` · ${actor}` : ''} — ${first}` +
-      rest.map((l) => `\n  ${l}`).join('') +
-      '\n'
+    const line = logLine(text, actor, now())
     if (!exists) {
       await library.writeText(path, `# Log — ${project.name}\n\n${line}`)
     } else {

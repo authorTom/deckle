@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { followRemoteChanges, isRemoteHandle } from '../fs/remote'
 import {
   activityStamp,
+  isChatter,
   loadActivity,
   readSeen,
   writeSeen,
@@ -133,7 +134,7 @@ export function useActivity(
     }
   }, [dir, check, streaming])
 
-  const unseen = useMemo(() => events.filter((e) => e.at > seenAt).length, [events, seenAt])
+  const unseen = useMemo(() => events.filter((e) => e.at > seenAt && !isChatter(e)).length, [events, seenAt])
 
   /** Everything up to now has been looked at. */
   const markSeen = useCallback(() => {

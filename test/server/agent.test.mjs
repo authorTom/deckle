@@ -233,7 +233,7 @@ describe('files, activity and MCP', () => {
       const all = (await rpc('tools/list')).body.result.tools.map((t) => t.name)
       expect(all).toEqual(expect.arrayContaining(['search', 'read', 'write_note', 'save_file', 'create_project', 'log_progress']))
       const readOnly = (await rpc('tools/list', {}, { token: RO })).body.result.tools
-      expect(readOnly.map((t) => t.name).sort()).toEqual(['list', 'list_bookmarks', 'list_projects', 'list_tasks', 'read', 'recent_activity', 'search'])
+      expect(readOnly.map((t) => t.name).sort()).toEqual(['get_project_context', 'list', 'list_bookmarks', 'list_briefs', 'list_projects', 'list_tasks', 'read', 'recent_activity', 'search'])
       expect(readOnly.every((t) => t.annotations.readOnlyHint)).toBe(true)
       const refused = await call('write_note', { path: 'x.md', content: 'x' }, { token: RO })
       expect(refused).toMatchObject({ isError: true })

@@ -29,6 +29,7 @@ import {
   normalizeNotePath,
 } from './library-store.mjs'
 import { STATUSES } from './projects.mjs'
+import { BRIEF_STATUSES, REPEATS } from './briefs.mjs'
 import { createPlanner } from './planner.mjs'
 
 /** Newest first. The one a client asks for is used when we know it. */
@@ -56,6 +57,7 @@ const INSTRUCTIONS = `Deckle is the user's knowledge base: plain Markdown notes 
 - To change part of a note, use edit_note rather than rewriting it with write_note.
 - When you need the user to do or decide something — review a report, approve a plan — add_task with source_note pointing at the note, rather than only saying so in the conversation.
 - Save useful sources with save_bookmark.
+- The user queues work for you as briefs. When asked to check for work, or on a schedule, call next_brief: it hands you the instructions and context files. report_progress as you go, deliver_file each finished file, ask_user if blocked, and complete_brief at the end.
 - Never store secrets: API keys, passwords, tokens, .env files, private keys.
 
 Deleting moves things to a recycle bin, and replacing a file keeps the old copy there, so the user can undo anything you do.`
@@ -158,13 +160,119 @@ function describeTask(task, data) {
   return `- ${box} ${task.title} (${bits.join(', ')}) · id ${task.id}`
 }
 
+/** A library path as it goes in a URL: each segment encoded, the slashes kept. */
+function urlPath(path) {
+  return path.split('/').map(encodeURIComponent).join('/')
+}
+
+function describeFile(file) {
+  const size = file.size != null ? ` (${formatBytes(file.size)})` : ''
+  const how = file.readable
+    ? 'read it with `read`'
+    : `binary — download GET /api/v1/files/${urlPath(file.path)}, or run deckle_pull.py`
+  return `- ${file.path}${size} — ${how}`
+}
+
+function describeBrief(brief) {
+  const bits = [
+    brief.status,
+    `P${brief.priority}`,
+    brief.agent ? `for ${brief.agent}` : 'any agent',
+    brief.due ? `due ${brief.due}` : null,
+    brief.repeat ? `repeats ${brief.repeat}${brief.start ? `, next ${brief.start}` : ''}` : brief.start ? `from ${brief.start}` : null,
+    brief.claim ? `held by ${brief.claim.agent}${brief.claim.stale ? ' (stale)' : ''}` : null,
+  ].filter(Boolean)
+  return `- ${brief.title} [${brief.project}] (${bits.join(', ')}) · id ${brief.id}`
+}
+
+/** What next_brief tells the agent it just took on. */
+function formatClaimed(brief, runDate, leaseMinutes) {
+  const outputDir = brief.repeat ? `${brief.outputDir}/${runDate}` : brief.outputDir
+  const facts = [
+    `P${brief.priority}`,
+    brief.due ? `due ${brief.due}` : null,
+    brief.outputs.length ? `expected outputs: ${brief.outputs.join(', ')}` : null,
+    brief.repeat ? `repeats ${brief.repeat}` : null,
+  ].filter(Boolean)
+  const reworking = brief.runLog.includes('**Changes requested:**') || brief.runLog.includes('**Answer:**')
+  return [
+    `You have taken the brief "${brief.title}" in project ${brief.project}.`,
+    `id: ${brief.id}`,
+    facts.join(' · '),
+    `## Instructions\n${brief.instructions || '(none written — the title is the brief)'}`,
+    `## Context files for this brief\n${brief.context.length ? brief.context.map(describeFile).join('\n') : '(none)'}`,
+    brief.projectContext.length
+      ? `## Context shared across the project\n${brief.projectContext.map(describeFile).join('\n')}`
+      : null,
+    `## Run log so far\n${brief.runLog.trim() || '(empty)'}`,
+    reworking
+      ? 'The run log holds answers or change requests from the user since an earlier run — act on the newest ones, and build on what is already in the Output folder rather than starting again.'
+      : null,
+    [
+      '## How to work it',
+      `- report_progress after each step (at least every ${leaseMinutes} minutes, or the brief goes back to the queue).`,
+      `- deliver_file each finished file; it lands in ${outputDir}/.`,
+      '- ask_user if you cannot go on without the user; then stop.',
+      '- complete_brief with a summary when the work is done.',
+    ].join('\n'),
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
 // ---- The server ------------------------------------------------------------
 
-export function createMcp({ library, store, search, activity, projects, libraryName, maxFileBytes }) {
+export function createMcp({ library, store, search, activity, projects, briefs, libraryName, maxFileBytes }) {
   const inlineLimit = Math.min(MAX_INLINE_FILE_BYTES, maxFileBytes)
 
   const record = (token, event) => activity.record({ actor: token.name, via: 'mcp', ...event })
   const planner = createPlanner(store)
+
+  /** Decode a save_file / deliver_file body, held to the inline limit. */
+  function decodeContent(args) {
+    const encoding = args?.encoding ?? 'utf8'
+    if (encoding !== 'utf8' && encoding !== 'base64') throw new ApiError(400, 'invalid_params', '"encoding" must be utf8 or base64')
+    const raw = str(args, 'content', { max: Math.ceil(inlineLimit * 1.4) + 16 })
+    const bytes = encoding === 'base64' ? Buffer.from(raw, 'base64') : Buffer.from(raw, 'utf8')
+    if (bytes.length > inlineLimit) {
+      throw new ApiError(
+        413,
+        'too_large',
+        `That is ${formatBytes(bytes.length)}; at most ${formatBytes(inlineLimit)} can be sent inline. Use the deckle_push.py script for large files.`,
+      )
+    }
+    return bytes
+  }
+
+  /**
+   * Write bytes to a path by the library's rules — a note keeps its history,
+   * any other file keeps its old copy in the bin — and record it.
+   */
+  async function saveBytes(path, bytes, token, { message, overwrite = true, brief } = {}) {
+    const existing = await library.exists(path)
+    if (existing === 'directory') return toolError(`"${path}" is a folder.`)
+    if (existing === 'file' && !overwrite) {
+      return toolError(`A file already exists at "${path}" and overwrite is false.`)
+    }
+    if (isNotePath(path)) {
+      const { note, created, before } = await store.writeNote(path, bytes.toString('utf8'), 'agent')
+      await record(token, { action: created ? 'created' : 'replaced', kind: 'note', path: note.path, message, before, brief })
+      return text(`${created ? 'Saved' : 'Replaced'} ${note.path}.`)
+    }
+    const { file, created } = await store.putFile(path, Readable.from([bytes]), { replacedBy: token.name })
+    await record(token, {
+      action: created ? 'saved' : 'replaced',
+      kind: 'file',
+      path: file.path,
+      size: file.size,
+      message,
+      brief,
+    })
+    return text(
+      `${created ? 'Saved' : 'Replaced'} ${file.path} (${formatBytes(file.size)}).` +
+        (created ? '' : ' The previous copy is in the recycle bin.'),
+    )
+  }
 
   /** A task-planner project named in args.project, as an id; null for the Inbox. */
   async function resolvePlannerProject(args) {
@@ -506,37 +614,9 @@ export function createMcp({ library, store, search, activity, projects, libraryN
       },
       async run(args, token) {
         const path = normalizeFilePath(str(args, 'path', { max: 1024 }))
-        const encoding = args?.encoding ?? 'utf8'
-        if (encoding !== 'utf8' && encoding !== 'base64') return toolError(`"encoding" must be utf8 or base64.`)
-        const raw = str(args, 'content', { max: Math.ceil(inlineLimit * 1.4) + 16 })
-        const bytes = encoding === 'base64' ? Buffer.from(raw, 'base64') : Buffer.from(raw, 'utf8')
-        if (bytes.length > inlineLimit) {
-          return toolError(`That is ${formatBytes(bytes.length)}; save_file takes at most ${formatBytes(inlineLimit)}. Use the deckle_push.py script for large files.`)
-        }
+        const bytes = decodeContent(args)
         const message = str(args, 'message', { optional: true, max: 1000 })
-        const existing = await library.exists(path)
-        if (existing === 'directory') return toolError(`"${path}" is a folder.`)
-        if (existing === 'file' && args?.overwrite === false) {
-          return toolError(`A file already exists at "${path}" and overwrite is false.`)
-        }
-
-        if (isNotePath(path)) {
-          const { note, created, before } = await store.writeNote(path, bytes.toString('utf8'), 'agent')
-          await record(token, { action: created ? 'created' : 'replaced', kind: 'note', path: note.path, message, before })
-          return text(`${created ? 'Saved' : 'Replaced'} ${note.path}.`)
-        }
-        const { file, created } = await store.putFile(path, Readable.from([bytes]), { replacedBy: token.name })
-        await record(token, {
-          action: created ? 'saved' : 'replaced',
-          kind: 'file',
-          path: file.path,
-          size: file.size,
-          message,
-        })
-        return text(
-          `${created ? 'Saved' : 'Replaced'} ${file.path} (${formatBytes(file.size)}).` +
-            (created ? '' : ' The previous copy is in the recycle bin.'),
-        )
+        return await saveBytes(path, bytes, token, { message, overwrite: args?.overwrite !== false })
       },
     },
     {
@@ -618,6 +698,205 @@ export function createMcp({ library, store, search, activity, projects, libraryN
         const { project, path } = await projects.log(str(args, 'project', { max: 300 }), entry, token.name)
         await record(token, { action: 'logged', kind: 'note', path, project, message: entry.split('\n')[0] })
         return text(`Logged to ${path}.`)
+      },
+    },
+    {
+      name: 'next_brief',
+      readOnly: false,
+      title: 'Take the next brief',
+      description:
+        "Take the next piece of work the user has queued for you: a brief, with its instructions, the files they attached as context, and its run log so far (which holds any answers to your questions and any changes they asked for). Returns nothing to do when the queue is empty — then stop. While you work, report_progress after each step: a brief you stop reporting on goes back to the queue. Deliver each finished file with deliver_file, ask_user if you are blocked, and complete_brief when the work is done.",
+      inputSchema: { type: 'object', properties: {} },
+      async run(_args, token) {
+        const { brief, expired, runDate } = await briefs.claim(token.name)
+        for (const lapsed of expired) {
+          await record(token, { action: 'released', kind: 'brief', path: lapsed.id, message: `${lapsed.agent} stopped reporting; back in the queue` })
+        }
+        if (!brief) return text('No briefs are waiting for you. Nothing to do — stop here.')
+        await record(token, { action: 'started', kind: 'brief', path: brief.id, message: brief.title })
+        return text(formatClaimed(brief, runDate, Math.round(briefs.leaseMs / 60_000)))
+      },
+    },
+    {
+      name: 'report_progress',
+      readOnly: false,
+      title: 'Report progress on a brief',
+      description: `Add a line to the brief's run log — what you just did, decided or found — and keep your claim on it. The user sees the latest line on the brief's card. Report at least every ${Math.round(briefs.leaseMs / 60_000)} minutes, or the brief goes back to the queue.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          brief: { type: 'string', description: 'The brief id next_brief gave you.' },
+          entry: { type: 'string', description: 'Markdown; may link files with [[wikilinks]].' },
+        },
+        required: ['brief', 'entry'],
+      },
+      async run(args, token) {
+        const brief = await briefs.progress(str(args, 'brief', { max: 1024 }), token.name, str(args, 'entry', { max: 20_000 }))
+        await record(token, { action: 'reported progress on', kind: 'brief', path: brief.id, message: String(args.entry).split('\n')[0] })
+        return text(`Noted on "${brief.title}".`)
+      },
+    },
+    {
+      name: 'ask_user',
+      readOnly: false,
+      title: 'Ask the user about a brief',
+      description:
+        "Ask the user a question you cannot go on without — a decision, a missing file, a login you must not store. The brief is set aside as blocked and your claim released; when they answer, it is queued again and next_brief hands it back with their answer in the run log. Save anything you have done so far with deliver_file or write_note first: the next session starts fresh.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          brief: { type: 'string' },
+          question: { type: 'string', description: 'Self-contained: the user may read it hours later.' },
+        },
+        required: ['brief', 'question'],
+      },
+      async run(args, token) {
+        const brief = await briefs.ask(str(args, 'brief', { max: 1024 }), token.name, str(args, 'question', { max: 20_000 }))
+        await record(token, { action: 'asked about', kind: 'brief', path: brief.id, message: String(args.question).split('\n')[0] })
+        return text(`Asked. "${brief.title}" is blocked until the user answers — stop work on it now.`)
+      },
+    },
+    {
+      name: 'deliver_file',
+      readOnly: false,
+      title: 'Deliver a file for a brief',
+      description: `Hand back a finished file for the brief you are working — a Word document, slide deck, spreadsheet, PDF, image, Markdown report or anything else. It is saved in the brief's Output folder (you choose only the name, which may include subfolders), where the user reviews it. Text formats as content; binary files as base64 with encoding "base64", at most ${formatBytes(inlineLimit)} — for bigger files run deckle_push.py with --brief. Delivering a name again replaces the file and keeps the old copy in the recycle bin.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          brief: { type: 'string' },
+          name: { type: 'string', description: 'e.g. "Vendor comparison.docx" or "charts/revenue.png".' },
+          content: { type: 'string' },
+          encoding: { type: 'string', enum: ['utf8', 'base64'], default: 'utf8' },
+          message: { type: 'string', description: 'One line on what this is, shown in the activity log.' },
+        },
+        required: ['brief', 'name', 'content'],
+      },
+      async run(args, token) {
+        const { brief, path } = await briefs.outputPath(str(args, 'brief', { max: 1024 }), token.name, str(args, 'name', { max: 300 }))
+        const bytes = decodeContent(args)
+        const result = await saveBytes(normalizeFilePath(path), bytes, token, {
+          message: str(args, 'message', { optional: true, max: 1000 }),
+          brief: brief.id,
+        })
+        if (!result.isError) await briefs.progress(brief.id, token.name, `Delivered [[${path.slice(brief.id.length + 1)}]].`)
+        return result
+      },
+    },
+    {
+      name: 'complete_brief',
+      readOnly: false,
+      title: 'Complete a brief',
+      description:
+        "Say the brief is done and hand it to the user for review, with a summary: what you produced, what you decided and why, anything left open. The files you delivered during this run are listed for them automatically. Your claim ends; if they ask for changes, next_brief hands the brief back with their comments.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          brief: { type: 'string' },
+          summary: { type: 'string', description: 'Markdown, for the person reviewing the work.' },
+        },
+        required: ['brief', 'summary'],
+      },
+      async run(args, token) {
+        const { brief, delivered, next } = await briefs.complete(str(args, 'brief', { max: 1024 }), token.name, str(args, 'summary', { max: 20_000 }))
+        await record(token, { action: 'completed', kind: 'brief', path: brief.id, message: brief.title, count: delivered.length })
+        return text(
+          `"${brief.title}" is with the user for review, with ${delivered.length} ${delivered.length === 1 ? 'file' : 'files'} delivered.` +
+            (next ? ` It repeats ${brief.repeat}: the next run is due ${next}.` : '') +
+            ' Call next_brief for more work.',
+        )
+      },
+    },
+    {
+      name: 'list_briefs',
+      readOnly: true,
+      title: 'List briefs',
+      description:
+        'List briefs — work queued for agents — with their status (draft, queued, running, blocked, review, changes-requested, done, cancelled), agent and project. Use next_brief to take one; this only looks.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', enum: BRIEF_STATUSES },
+          project: { type: 'string' },
+          mine: { type: 'boolean', description: 'Only briefs addressed to you or to any agent.' },
+        },
+      },
+      async run(args, token) {
+        const status = BRIEF_STATUSES.includes(args?.status) ? args.status : undefined
+        const list = await briefs.list({
+          status,
+          project: str(args, 'project', { optional: true, max: 300 }),
+          agent: args?.mine === true ? token.name : undefined,
+        })
+        if (!list.length) return text(status ? `No ${status} briefs.` : 'No briefs.')
+        return text(list.map(describeBrief).join('\n'))
+      },
+    },
+    {
+      name: 'create_brief',
+      readOnly: false,
+      title: 'Queue a brief',
+      description:
+        "Queue work for an agent — yourself later, or another agent by its name — as a brief in a project: a title, instructions written for whoever picks it up cold, and optionally who should do it, a priority, a due date, a date not to start before, a repeat (daily, weekly, monthly) and the output types expected. Use it to split a large job into pieces, or to hand work on. The project must exist (create_project).",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          project: { type: 'string' },
+          title: { type: 'string' },
+          instructions: { type: 'string', description: 'Markdown: the goal, the inputs, what done looks like.' },
+          agent: { type: 'string', description: 'The agent to do it, by token name; omit for any agent.' },
+          priority: { type: 'integer', enum: [1, 2, 3, 4], default: 3 },
+          due: { type: 'string', description: 'YYYY-MM-DD.' },
+          start: { type: 'string', description: 'YYYY-MM-DD; not picked up before this date.' },
+          repeat: { type: 'string', enum: REPEATS },
+          outputs: { type: 'array', items: { type: 'string' }, description: 'File types expected, e.g. ["docx", "pptx"].' },
+          draft: { type: 'boolean', description: 'Save without queuing it, for the user to look over first.' },
+        },
+        required: ['project', 'title', 'instructions'],
+      },
+      async run(args, token) {
+        const brief = await briefs.create({
+          project: str(args, 'project', { max: 300 }),
+          title: str(args, 'title', { max: 300 }),
+          instructions: str(args, 'instructions', { max: 200_000 }),
+          agent: str(args, 'agent', { optional: true, max: 60 }),
+          priority: args?.priority,
+          due: str(args, 'due', { optional: true, max: 20 }),
+          start: str(args, 'start', { optional: true, max: 20 }),
+          repeat: str(args, 'repeat', { optional: true, max: 20 }),
+          outputs: stringList(args, 'outputs'),
+          status: args?.draft === true ? 'draft' : 'queued',
+          createdBy: token.name,
+        })
+        await record(token, { action: 'created', kind: 'brief', path: brief.id, message: brief.title })
+        return text(`${brief.status === 'draft' ? 'Drafted' : 'Queued'} "${brief.title}" (id ${brief.id}). Files to work from go in ${brief.contextDir}/.`)
+      },
+    },
+    {
+      name: 'get_project_context',
+      readOnly: true,
+      title: 'Catch up on a project',
+      description:
+        "Everything needed to pick up a project in one call: its overview, the latest entries of its log, its open briefs, and the files that changed most recently. Call it before working in a project you have not seen in this session.",
+      inputSchema: {
+        type: 'object',
+        properties: { project: { type: 'string' } },
+        required: ['project'],
+      },
+      async run(args) {
+        const { project, overview, log, briefs: open, recent } = await briefs.projectContext(str(args, 'project', { max: 300 }))
+        return text(
+          [
+            `# ${project.name} — ${project.status ?? 'no status'}`,
+            project.summary,
+            `## Overview (${project.overview ?? 'none'})\n${overview.trim() || '(empty)'}`,
+            `## Latest log entries\n${log || '(no log yet)'}`,
+            `## Open briefs\n${open.length ? open.map(describeBrief).join('\n') : '(none)'}`,
+            `## Recently changed\n${recent.length ? recent.map(describeFile).join('\n') : '(nothing)'}`,
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
+        )
       },
     },
     {
@@ -882,7 +1161,7 @@ export function createMcp({ library, store, search, activity, projects, libraryN
       annotations: {
         title: tool.title,
         readOnlyHint: tool.readOnly,
-        destructiveHint: ['delete', 'save_file', 'write_note', 'edit_note', 'delete_task'].includes(tool.name),
+        destructiveHint: ['delete', 'save_file', 'deliver_file', 'write_note', 'edit_note', 'delete_task'].includes(tool.name),
         idempotentHint: tool.readOnly,
         openWorldHint: false,
       },
@@ -915,7 +1194,7 @@ export function createMcp({ library, store, search, activity, projects, libraryN
             serverInfo: { name: 'deckle', title: `Deckle — ${libraryName}`, version: VERSION },
             instructions: canWrite
               ? INSTRUCTIONS
-              : `${INSTRUCTIONS}\n\nThis connection uses a read-only token: search, read, list, list_projects, recent_activity, list_tasks and list_bookmarks are available; nothing can be saved.`,
+              : `${INSTRUCTIONS}\n\nThis connection uses a read-only token: search, read, list, list_projects, get_project_context, recent_activity, list_briefs, list_tasks and list_bookmarks are available; nothing can be saved.`,
           },
         }
       }

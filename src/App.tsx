@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Minimize2 } from 'lucide-react'
 import type { Editor as TiptapEditor } from '@tiptap/react'
 import Sidebar from './components/Sidebar'
@@ -15,12 +15,19 @@ import ResizeCrew from './components/ResizeCrew'
 import TaskPanel, { type PanelTab } from './components/TaskPanel'
 import ProjectsView from './components/ProjectsView'
 import ActivityView from './components/ActivityView'
+// Both are only needed once someone opens the Agents tab or writes a brief, so
+// they stay out of the first screen's download (see vite.config.ts).
+const AgentsView = lazy(() => import('./components/AgentsView'))
+const NewBriefModal = lazy(() => import('./components/NewBriefModal'))
+import { useBriefs } from './briefs/useBriefs'
+import { applyAction, attachContext, createBrief, groupOf, type Brief, type BriefAction, type NewBrief } from './briefs/briefs'
+import { selectionFromFiles } from './lib/importMarkdown'
 import { useActivity } from './activity/useActivity'
 import { useReview } from './activity/useReview'
 import type { ActivityEvent } from './activity/activity'
 import { readSnapshot } from './fs/history'
 import { timeAgo } from './lib/format'
-import { lastEventFor } from './activity/activity'
+import { isChatter, lastEventFor } from './activity/activity'
 import { useProjects } from './projects/useProjects'
 import {
   DEFAULT_PROJECTS_DIR,
@@ -212,6 +219,7 @@ export default function App() {
   )
   const toggleProjects = useCallback(() => openPanelTab('projects'), [openPanelTab])
   const toggleActivity = useCallback(() => openPanelTab('activity'), [openPanelTab])
+  const toggleAgents = useCallback(() => openPanelTab('agents'), [openPanelTab])
   // Docked panels stay mounted for the length of their slide-out, so closing
   // one animates instead of vanishing. Matches --dur-slow.
   const PANEL_EXIT_MS = 260
@@ -254,6 +262,23 @@ export default function App() {
   const projectsDir =
     (usingServerLibrary ? serverLibrary?.projectsDir : undefined) ?? DEFAULT_PROJECTS_DIR
   const projects = useProjects(libraryDir, tree, projectsDir)
+  // Briefs: work queued for agents, inside those projects.
+  const { briefs, runs, refreshRuns } = useBriefs(libraryDir, tree, projectsDir)
+  const [newBrief, setNewBrief] = useState<{ open: boolean; project?: string }>({ open: false })
+  // Mounted from its first opening on, so closing it can animate out.
+  const [newBriefLoaded, setNewBriefLoaded] = useState(false)
+  const openNewBrief = useCallback((project?: string) => {
+    setNewBriefLoaded(true)
+    setNewBrief({ open: true, project })
+  }, [])
+  const closeNewBrief = useCallback(() => setNewBrief((b) => ({ ...b, open: false })), [])
+  /** Every agent the library has heard from: polled for briefs, or written anything. */
+  const agentNames = useMemo(() => {
+    const names = new Set(Object.keys(runs.agents))
+    for (const event of activity.events) if (event.actor) names.add(event.actor)
+    return [...names].sort((a, b) => a.localeCompare(b))
+  }, [runs.agents, activity.events])
+  const briefsNeedingYou = useMemo(() => briefs.filter((b) => groupOf(b) === 'needs-you').length, [briefs])
 
   // Transient confirmation toast (e.g. after capturing a task).
   const toast = useToast()
@@ -556,7 +581,7 @@ export default function App() {
     const out = new Map<string, number>()
     for (const event of activity.events) {
       if (event.at <= activity.seenAt) break
-      if (event.project) out.set(event.project, (out.get(event.project) ?? 0) + 1)
+      if (event.project && !isChatter(event)) out.set(event.project, (out.get(event.project) ?? 0) + 1)
     }
     return out
   }, [activity.events, activity.seenAt])
@@ -607,6 +632,75 @@ export default function App() {
     },
     [libraryDir, reload, showToast],
   )
+  const handleBriefAction = useCallback(
+    async (brief: Brief, action: BriefAction): Promise<boolean> => {
+      if (!libraryDir) return false
+      try {
+        const status = await applyAction(libraryDir, brief, action)
+        // Signing off a brief signs off the agent's writes inside it.
+        if (action.kind === 'approve') {
+          review.markReviewed(
+            activity.events.filter((e) => (e.to ?? e.path ?? '').startsWith(`${brief.id}/`)),
+          )
+        }
+        await reload()
+        void refreshRuns()
+        const said: Record<BriefAction['kind'], string> = {
+          queue: 'queued',
+          'to-draft': 'back to draft',
+          approve: status === 'done' ? 'approved' : 'approved; the next run is scheduled',
+          'request-changes': 'sent back with your changes',
+          answer: 'answered and queued again',
+          cancel: 'cancelled',
+          rerun: 'queued to run again',
+        }
+        showToast(`${brief.title} ${said[action.kind]}`)
+        return true
+      } catch (err) {
+        showToast(err instanceof Error && err.message ? err.message : `Couldn't update ${brief.title}`, 'danger')
+        return false
+      }
+    },
+    [libraryDir, review, activity.events, reload, refreshRuns, showToast],
+  )
+  const handleCreateBrief = useCallback(
+    async (input: NewBrief, newProject: { name: string; summary: string } | null): Promise<boolean> => {
+      if (!libraryDir) return false
+      try {
+        let projectName = input.project
+        if (newProject) {
+          const overview = await createProject(libraryDir, projectsDir, newProject.name, newProject.summary)
+          // The folder may have been given a free name ("Acme 1").
+          projectName = overview.slice(projectsDir.length + 1, overview.lastIndexOf('/'))
+        }
+        await createBrief(libraryDir, projectsDir, { ...input, project: projectName })
+        await reload()
+        setPanelTab('agents')
+        setTasksOpen(true)
+        showToast(input.queue ? `${input.title.trim()} queued` : `${input.title.trim()} saved as a draft`)
+        return true
+      } catch {
+        return false
+      }
+    },
+    [libraryDir, projectsDir, reload, showToast],
+  )
+  const handleAttachToBrief = useCallback(
+    (brief: Brief, files: FileList) => {
+      if (!libraryDir) return
+      void selectionFromFiles(files)
+        .then((selection) => attachContext(libraryDir, brief, selection.items))
+        .then(() => reload())
+        .then(() => showToast(`Attached to ${brief.title}`))
+        .catch(() => showToast(`Couldn't attach files to ${brief.title}`, 'danger'))
+    },
+    [libraryDir, reload, showToast],
+  )
+  const readLibraryText = useCallback(
+    (path: string) => (libraryDir ? readNoteFromLibrary(libraryDir, path) : Promise.resolve('')),
+    [libraryDir],
+  )
+
   const handleCreateProject = useCallback(
     (name: string, summary: string) => {
       if (!libraryDir) return
@@ -638,6 +732,8 @@ export default function App() {
       setExportOpen,
       toggleProjects,
       toggleActivity,
+      toggleAgents,
+      openNewBrief,
       toggleTasks,
       toggleBookmarks,
       setShortcutsOpen,
@@ -678,6 +774,8 @@ export default function App() {
     toggleBookmarks,
     toggleProjects,
     toggleActivity,
+    toggleAgents,
+    openNewBrief,
     captureSelectionBookmark,
     activeNote,
     handleDelete,
@@ -784,6 +882,22 @@ export default function App() {
               review={review}
               onCompare={compareEvent}
             />
+          }
+          agentsCount={briefsNeedingYou}
+          agents={
+            <Suspense fallback={<div className="task-empty">Loading…</div>}>
+              <AgentsView
+                briefs={briefs}
+                runs={runs}
+                supported={activity.supported}
+                agentNames={agentNames}
+                onOpen={handleSelect}
+                onNewBrief={() => openNewBrief()}
+                onAction={handleBriefAction}
+                onAttach={handleAttachToBrief}
+                readText={readLibraryText}
+              />
+            </Suspense>
           }
         />
         {tasksOpen && (
@@ -950,6 +1064,19 @@ export default function App() {
       />
 
       <CompareModal request={compare} onClose={() => setCompare(null)} />
+
+      {newBrief.open || newBriefLoaded ? (
+        <Suspense fallback={null}>
+          <NewBriefModal
+            open={newBrief.open}
+            projects={projects.map((p) => p.name)}
+            initialProject={newBrief.project}
+            agentNames={agentNames}
+            onClose={closeNewBrief}
+            onCreate={handleCreateBrief}
+          />
+        </Suspense>
+      ) : null}
 
       <HistoryModal
         open={historyOpen}

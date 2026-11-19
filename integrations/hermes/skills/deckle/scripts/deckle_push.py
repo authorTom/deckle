@@ -9,6 +9,11 @@ the same bearer token Hermes uses for MCP.
     deckle_push.py report.pdf --project "Acme research"
     deckle_push.py ./out --project "Acme research" --message "final deliverables"
     deckle_push.py ./site --to "Projects/Blog relaunch/site" --dry-run
+    deckle_push.py deck.pptx --brief "Projects/Acme/Briefs/2026-11-19 Pitch deck"
+
+With --brief, the files are delivered into the brief you are working (you must
+hold it: take it with next_brief first), landing in its Output folder — dated
+Output/<date>/ for a repeating brief — exactly as MCP's deliver_file would.
 
 Folders keep their structure under the destination. Some things are never
 sent: hidden files and folders (.git, .env, .venv…), dependency and build
@@ -139,14 +144,28 @@ def human(n: int) -> str:
     return f"{n} B"
 
 
-def upload(base_url: str, token: str, dest: str, local: Path, overwrite: bool, message: str | None) -> tuple[int, dict]:
-    quoted = "/".join(urllib.parse.quote(part, safe="") for part in dest.split("/"))
+def upload(
+    base_url: str,
+    token: str,
+    dest: str,
+    local: Path,
+    overwrite: bool,
+    message: str | None,
+    brief: str | None = None,
+) -> tuple[int, dict]:
     query = {}
+    if brief:
+        # Delivered into the brief: the server picks the Output folder.
+        query["brief"] = brief
+        query["name"] = dest
+        url = f"{base_url}/api/v1/briefs/output"
+    else:
+        quoted = "/".join(urllib.parse.quote(part, safe="") for part in dest.split("/"))
+        url = f"{base_url}/api/v1/files/{quoted}"
     if not overwrite:
         query["overwrite"] = "false"
     if message:
         query["message"] = message
-    url = f"{base_url}/api/v1/files/{quoted}"
     if query:
         url += "?" + urllib.parse.urlencode(query)
     data = local.read_bytes()
@@ -181,6 +200,7 @@ def main() -> int:
     where = parser.add_mutually_exclusive_group()
     where.add_argument("--project", help='shorthand for --to "Projects/<name>"')
     where.add_argument("--to", help="destination folder in the library (default: Inbox)")
+    where.add_argument("--brief", metavar="ID", help="deliver into this brief's Output folder (the id next_brief gave you)")
     parser.add_argument("--message", help="one line on what this is, shown in Deckle's activity log")
     parser.add_argument("--no-overwrite", action="store_true", help="skip files that already exist in Deckle")
     parser.add_argument("--exclude", action="append", default=[], metavar="PATTERN", help="skip matching paths (repeatable)")
@@ -197,8 +217,12 @@ def main() -> int:
         print("DECKLE_URL and DECKLE_TOKEN must be set.", file=sys.stderr)
         return 2
 
-    dest_root = f"Projects/{args.project}" if args.project else (args.to or "Inbox")
-    dest_root = dest_root.strip("/")
+    if args.brief:
+        dest_root = ""
+    else:
+        dest_root = f"Projects/{args.project}" if args.project else (args.to or "Inbox")
+        dest_root = dest_root.strip("/")
+    where_label = f"the brief's Output folder" if args.brief else f"{dest_root}/"
     files, skipped = collect(args.paths, args.exclude)
     limit = int(args.max_mb * 1024 * 1024)
 
@@ -216,7 +240,7 @@ def main() -> int:
         if args.dry_run:
             print(f"would send {dest} ({human(size)})")
             continue
-        status, body = upload(base_url, token, dest, local, not args.no_overwrite, args.message)
+        status, body = upload(base_url, token, dest, local, not args.no_overwrite, args.message, args.brief)
         if status in (200, 201):
             sent += 1
             total_bytes += size
@@ -231,10 +255,10 @@ def main() -> int:
             print(f"failed {dest}: {reason or f'HTTP {status}'}", file=sys.stderr)
 
     if args.dry_run:
-        print(f"\n{len(files)} file(s) would go to {dest_root}/")
+        print(f"\n{len(files)} file(s) would go to {where_label}")
     else:
         extra = f", {replaced} replaced (old copies are in Deckle's recycle bin)" if replaced else ""
-        print(f"\nSent {sent} file(s), {human(total_bytes)}, to {dest_root}/{extra}.")
+        print(f"\nSent {sent} file(s), {human(total_bytes)}, to {where_label}{extra}.")
     for name, reason in skipped:
         print(f"skipped {name}: {reason}")
     for name, reason in failed:

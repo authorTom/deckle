@@ -9,6 +9,7 @@
 // for and when to reach for it, not just what its fields are called.
 
 import { VERSION } from './version.mjs'
+import { BRIEF_STATUSES, REPEATS } from './briefs.mjs'
 
 const NOTE_PATH_DESCRIPTION =
   'Note path relative to the library root, using "/" separators, e.g. "Projects/idea.md". ' +
@@ -85,6 +86,7 @@ export function buildOpenApi(libraryName) {
       { name: 'files', description: 'Files of any type: reports, spreadsheets, images, PDFs.' },
       { name: 'search', description: 'Find notes and documents by the words they contain.' },
       { name: 'activity', description: 'What agents and scripts changed, and when.' },
+      { name: 'briefs', description: 'Work queued for agents, which they claim, deliver and hand back.' },
       { name: 'mcp', description: 'The same library as a Model Context Protocol server.' },
       { name: 'folders', description: 'The folder tree notes are organised into.' },
       { name: 'transfer', description: 'Bulk import and whole-library export.' },
@@ -540,6 +542,201 @@ export function buildOpenApi(libraryName) {
         }),
       },
 
+      '/briefs': {
+        get: withErrors({
+          tags: ['briefs'],
+          operationId: 'listBriefs',
+          summary: 'List briefs: work queued for agents, most pressing first.',
+          description:
+            'A brief is a folder, `Projects/<project>/Briefs/<date> <title>/`, holding `Brief.md` ' +
+            '(instructions; its front matter is the state), `Context/` (files to work from), ' +
+            '`Output/` (what the agent hands back) and `Run.md` (the dated record). Its id is ' +
+            'that folder\'s path.',
+          parameters: [
+            { name: 'status', in: 'query', schema: { type: 'string', enum: BRIEF_STATUSES } },
+            { name: 'project', in: 'query', schema: { type: 'string' } },
+            { name: 'agent', in: 'query', schema: { type: 'string' }, description: 'Only briefs for this agent or for any agent.' },
+          ],
+          responses: {
+            200: jsonResponse('Briefs.', {
+              type: 'object',
+              properties: { count: { type: 'integer' }, briefs: { type: 'array', items: ref('Brief') } },
+            }),
+          },
+        }),
+        post: withErrors({
+          tags: ['briefs'],
+          operationId: 'createBrief',
+          summary: 'Queue a brief in an existing project.',
+          requestBody: jsonBody({
+            type: 'object',
+            required: ['project', 'title'],
+            properties: {
+              project: { type: 'string' },
+              title: { type: 'string' },
+              instructions: { type: 'string', description: 'Markdown.' },
+              agent: { type: 'string', description: 'A token name; omit for any agent.' },
+              priority: { type: 'integer', enum: [1, 2, 3, 4], default: 3 },
+              due: { type: 'string', format: 'date' },
+              start: { type: 'string', format: 'date', description: 'Not claimed before this date.' },
+              repeat: { type: 'string', enum: REPEATS },
+              outputs: { type: 'array', items: { type: 'string' }, example: ['docx', 'pptx'] },
+              draft: { type: 'boolean', description: 'Save it without queuing it.' },
+            },
+          }),
+          responses: { 201: jsonResponse('The brief.', ref('Brief')) },
+        }),
+      },
+
+      '/briefs/detail': {
+        get: withErrors({
+          tags: ['briefs'],
+          operationId: 'getBrief',
+          summary: 'One brief, with its instructions, run log and the project\'s shared context.',
+          parameters: [{ name: 'id', in: 'query', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: jsonResponse('The brief.', {
+              allOf: [
+                ref('Brief'),
+                {
+                  type: 'object',
+                  properties: {
+                    instructions: { type: 'string' },
+                    runLog: { type: 'string' },
+                    projectContext: { type: 'array', items: ref('BriefFile') },
+                  },
+                },
+              ],
+            }),
+          },
+        }),
+      },
+
+      '/briefs/claim': {
+        post: withErrors({
+          tags: ['briefs'],
+          operationId: 'claimBrief',
+          summary: 'Take the most pressing brief this token may work, or none.',
+          description:
+            'Briefs addressed to this token\'s name or to no one, queued (and past their start date) ' +
+            'or with changes requested. The claim lapses unless renewed by /briefs/progress within ' +
+            'DECKLE_BRIEF_LEASE_MINUTES (30 by default), and the brief returns to the queue.',
+          responses: {
+            200: jsonResponse('The claimed brief, or null.', {
+              type: 'object',
+              properties: { brief: { oneOf: [ref('Brief'), { type: 'null' }] }, runDate: { type: ['string', 'null'] } },
+            }),
+          },
+        }),
+      },
+
+      '/briefs/progress': {
+        post: withErrors(
+          {
+            tags: ['briefs'],
+            operationId: 'reportBriefProgress',
+            summary: 'Add a line to the run log and renew the claim.',
+            requestBody: jsonBody({
+              type: 'object',
+              required: ['brief', 'entry'],
+              properties: { brief: { type: 'string' }, entry: { type: 'string' } },
+            }),
+            responses: { 200: jsonResponse('Noted.', { type: 'object' }) },
+          },
+          { 409: jsonResponse('This token does not hold the brief (code `not_claimed`).', ref('Error')) },
+        ),
+      },
+
+      '/briefs/ask': {
+        post: withErrors(
+          {
+            tags: ['briefs'],
+            operationId: 'askAboutBrief',
+            summary: 'Ask the user a question; the brief is blocked until they answer.',
+            requestBody: jsonBody({
+              type: 'object',
+              required: ['brief', 'question'],
+              properties: { brief: { type: 'string' }, question: { type: 'string' } },
+            }),
+            responses: { 200: jsonResponse('The brief, now blocked.', ref('Brief')) },
+          },
+          { 409: jsonResponse('This token does not hold the brief.', ref('Error')) },
+        ),
+      },
+
+      '/briefs/complete': {
+        post: withErrors(
+          {
+            tags: ['briefs'],
+            operationId: 'completeBrief',
+            summary: 'Hand the brief to the user for review.',
+            requestBody: jsonBody({
+              type: 'object',
+              required: ['brief', 'summary'],
+              properties: { brief: { type: 'string' }, summary: { type: 'string' } },
+            }),
+            responses: {
+              200: jsonResponse('The brief, the files delivered in this run, and the next run date of a repeating brief.', {
+                type: 'object',
+                properties: {
+                  brief: ref('Brief'),
+                  delivered: { type: 'array', items: ref('BriefFile') },
+                  next: { type: ['string', 'null'] },
+                },
+              }),
+            },
+          },
+          { 409: jsonResponse('This token does not hold the brief.', ref('Error')) },
+        ),
+      },
+
+      '/briefs/output': {
+        put: withErrors(
+          {
+            tags: ['briefs'],
+            operationId: 'deliverBriefFile',
+            summary: 'Deliver a file into the brief\'s Output folder (Output/<date>/ for a repeating brief).',
+            parameters: [
+              { name: 'brief', in: 'query', required: true, schema: { type: 'string' } },
+              { name: 'name', in: 'query', required: true, schema: { type: 'string' }, description: 'File name, may include subfolders.' },
+              { name: 'message', in: 'query', schema: { type: 'string' } },
+            ],
+            requestBody: { required: true, content: { 'application/octet-stream': { schema: { type: 'string', format: 'binary' } } } },
+            responses: {
+              200: jsonResponse('Replaced; the old copy is in the recycle bin.', ref('FileInfo')),
+              201: jsonResponse('Saved.', ref('FileInfo')),
+            },
+          },
+          { 409: jsonResponse('This token does not hold the brief.', ref('Error')) },
+        ),
+      },
+
+      '/agents': {
+        get: withErrors({
+          tags: ['briefs'],
+          operationId: 'listAgents',
+          summary: 'Each token\'s last request, last poll for briefs, and the brief it is working.',
+          responses: {
+            200: jsonResponse('Agents by token name.', {
+              type: 'object',
+              properties: {
+                agents: {
+                  type: 'object',
+                  additionalProperties: {
+                    type: 'object',
+                    properties: {
+                      lastSeen: { type: 'integer' },
+                      lastPoll: { type: 'integer' },
+                      current: { type: 'string' },
+                    },
+                  },
+                },
+              },
+            }),
+          },
+        }),
+      },
+
       '/mcp': {
         post: {
           tags: ['mcp'],
@@ -548,10 +745,11 @@ export function buildOpenApi(libraryName) {
           description:
             'Point an MCP client at this URL with the same bearer token. It answers JSON-RPC ' +
             'POSTs with JSON (no event stream, no session id), and offers the tools search, ' +
-            'read, list, list_projects, recent_activity, list_tasks and list_bookmarks — plus, ' +
-            'for a read-write token, write_note, edit_note, save_file, create_project, ' +
-            'update_project, log_progress, add_task, update_task, delete_task, save_bookmark, ' +
-            'move and delete. Requests carrying an Origin header must come from DECKLE_API_CORS_ORIGINS.',
+            'read, list, list_projects, get_project_context, recent_activity, list_briefs, list_tasks ' +
+            'and list_bookmarks — plus, for a read-write token, write_note, edit_note, save_file, ' +
+            'create_project, update_project, log_progress, next_brief, report_progress, ask_user, ' +
+            'deliver_file, complete_brief, create_brief, add_task, update_task, delete_task, ' +
+            'save_bookmark, move and delete. Requests carrying an Origin header must come from DECKLE_API_CORS_ORIGINS.',
           requestBody: jsonBody({ type: 'object', description: 'A JSON-RPC 2.0 message, or a batch of them.' }),
           responses: {
             200: jsonResponse('A JSON-RPC response (or a batch of them).', { type: 'object' }),
@@ -1038,6 +1236,52 @@ export function buildOpenApi(libraryName) {
             updatedAt: { type: 'integer', description: 'Unix milliseconds.' },
           },
         },
+        BriefFile: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            name: { type: 'string' },
+            kind: { type: 'string', enum: ['note', 'file'] },
+            size: { type: ['integer', 'null'] },
+            updatedAt: { type: ['integer', 'null'] },
+            readable: { type: 'boolean', description: 'Whether MCP `read` returns its text; otherwise download it.' },
+          },
+        },
+        Brief: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: 'Projects/Acme/Briefs/2026-11-19 Vendor comparison' },
+            project: { type: 'string' },
+            title: { type: 'string' },
+            status: { type: 'string', enum: BRIEF_STATUSES },
+            agent: { type: ['string', 'null'] },
+            priority: { type: 'integer', enum: [1, 2, 3, 4] },
+            due: { type: ['string', 'null'] },
+            start: { type: ['string', 'null'] },
+            repeat: { type: ['string', 'null'], enum: [...REPEATS, null] },
+            outputs: { type: 'array', items: { type: 'string' } },
+            created: { type: ['string', 'null'] },
+            createdBy: { type: ['string', 'null'] },
+            lastRun: { type: ['string', 'null'] },
+            brief: { type: 'string', description: 'Path of Brief.md.' },
+            run: { type: ['string', 'null'], description: 'Path of Run.md.' },
+            contextDir: { type: 'string' },
+            outputDir: { type: 'string' },
+            context: { type: 'array', items: ref('BriefFile') },
+            output: { type: 'array', items: ref('BriefFile') },
+            updatedAt: { type: 'integer' },
+            claim: {
+              type: ['object', 'null'],
+              properties: {
+                agent: { type: 'string' },
+                claimedAt: { type: 'integer' },
+                heartbeatAt: { type: 'integer' },
+                progress: { type: ['string', 'null'] },
+                stale: { type: 'boolean' },
+              },
+            },
+          },
+        },
         ActivityEvent: {
           type: 'object',
           properties: {
@@ -1045,8 +1289,9 @@ export function buildOpenApi(libraryName) {
             actor: { type: 'string', description: 'The name of the token that made the change.' },
             via: { type: 'string', enum: ['api', 'mcp'] },
             action: { type: 'string', example: 'saved' },
-            kind: { type: 'string', enum: ['note', 'file', 'folder', 'project', 'task', 'bookmark'] },
+            kind: { type: 'string', enum: ['note', 'file', 'folder', 'project', 'task', 'bookmark', 'brief'] },
             path: { type: 'string' },
+            brief: { type: 'string', description: 'The brief a delivered file was for, if any.' },
             to: { type: 'string', description: 'Moves only: where it went.' },
             project: { type: 'string', description: 'The project folder the change was in, if any.' },
             size: { type: 'integer' },

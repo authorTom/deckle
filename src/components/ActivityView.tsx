@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Activity,
   Bookmark,
+  Bot,
   Check,
   CheckCheck,
   GitCompareArrows,
@@ -45,6 +46,8 @@ function iconForEvent(event: ActivityEvent): LucideIcon {
       return ListTodo
     case 'bookmark':
       return Bookmark
+    case 'brief':
+      return Bot
     case 'note':
       return FileText
     case 'file': {
@@ -216,6 +219,13 @@ export default function ActivityView({
                         {nameOf(target)}
                       </button>
                     )
+                  } else if (target && event.kind === 'brief' && now === 'folder') {
+                    // A brief opens on its instructions.
+                    targetEl = (
+                      <button type="button" className="activity-target" onClick={() => onOpen(`${target}/Brief.md`)}>
+                        {nameOf(target).replace(/^\d{4}-\d{2}-\d{2}\s+/, '')}
+                      </button>
+                    )
                   } else if (target && now === 'file') {
                     targetEl = (
                       <button type="button" className="activity-target" onClick={() => onOpen(target)}>
@@ -243,7 +253,7 @@ export default function ActivityView({
                         <p className="activity-line">
                           <span className="activity-actor">{event.actor}</span> {event.action}
                           {event.count && event.count > 1 ? ` ${event.count} items` : ''}
-                          {event.kind === 'folder' || event.kind === 'project' ? ` ${event.kind}` : ''}{' '}
+                          {event.kind === 'folder' || event.kind === 'project' || event.kind === 'brief' ? ` ${event.kind}` : ''}{' '}
                           {targetEl}
                           {event.to && event.path && (
                             <span className="activity-from"> from {event.path}</span>

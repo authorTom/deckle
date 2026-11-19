@@ -14,6 +14,39 @@ reach it by a host name.
 
 ### Added
 
+- **Briefs: a work queue for agents.** A new **Agents** tab in the left panel
+  (and `Cmd`/`Ctrl`+`K` → *New brief for an agent*) to hand an agent a piece
+  of work: instructions, files to work from (dropped in; folders and ZIPs
+  unpacked), the file types you want back, and optionally the agent, a
+  priority, a due date, a date not to start before and a repeat — with
+  starting points for a research report, a slide deck, a spreadsheet analysis
+  and a document. Deckle still runs nothing: an agent takes work with the new
+  MCP tool `next_brief`, then `report_progress`, `ask_user`, `deliver_file`
+  and `complete_brief`. Briefs are grouped by what they need — your answer or
+  review first — with each agent's latest progress line live on its card.
+  **Approve** a delivered brief, **Request changes** with a comment (it goes
+  back to the agent with it), answer a question, cancel, or run one again.
+  The tab counts briefs waiting on you and lists every agent with when it last
+  checked for work. A brief is a folder of plain files —
+  `Projects/<project>/Briefs/<date> <title>/` with `Brief.md` (front matter is
+  the state), `Context/`, `Output/` and `Run.md` — and
+  `Projects/<project>/Context/` is offered with every brief in the project.
+  Repeating briefs deliver each run into `Output/<date>/`.
+- **Claims that can't get stuck.** A brief an agent stops reporting on goes
+  back in the queue after `DECKLE_BRIEF_LEASE_MINUTES` (30). Who holds what is
+  kept in `.deckle/runs.json`, beside tasks and bookmarks, so a progress report
+  doesn't add a version to `Brief.md`'s history.
+- **More for agents.** `create_brief` (queue work for another agent, or split
+  a job), `list_briefs`, and `get_project_context` — a project's overview,
+  latest log, open briefs and recent files in one call. REST has the same:
+  `/briefs`, `/briefs/detail`, `/briefs/claim`, `/briefs/progress`,
+  `/briefs/ask`, `/briefs/complete`, `PUT /briefs/output` and `/agents`, in the
+  OpenAPI document.
+- **Hermes kit.** The skill (1.1.0) teaches Hermes to work a brief from a cold
+  start. `deckle_push.py --brief` delivers large files and folders into a
+  brief, and the new `deckle_pull.py` downloads a brief's context — PDFs,
+  templates and images included — to work on locally. The guide shows the
+  scheduled job that checks for work, and connecting Claude Code alongside.
 - **A review queue for agent work.** The Activity feed opens on **To review**:
   every note and file an agent saved or changed that you haven't marked
   reviewed, newest first. Mark one, or all. Reviewed is kept in the library
