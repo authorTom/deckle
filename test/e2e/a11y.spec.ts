@@ -54,6 +54,39 @@ test.describe('accessibility (axe, WCAG 2.1 AA)', () => {
         await scan(page, 'compare dialog')
       })
 
+      test('the Agents tab, a brief waiting on you, and the New brief dialog', async ({ page }) => {
+        const auth = { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }
+        const call = async (name: string, args: object) => {
+          const res = await page.request.post('/api/v1/mcp', {
+            headers: auth,
+            data: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } },
+          })
+          return (await res.json()).result.content[0].text as string
+        }
+        await call('create_project', { name: `A11y briefs ${scheme}`, summary: 'Scanned' })
+        await call('create_brief', { project: `A11y briefs ${scheme}`, title: `Waiting ${scheme}`, instructions: 'x', priority: 2 })
+        await call('create_brief', { project: `A11y briefs ${scheme}`, title: `Queued ${scheme}`, instructions: 'x', priority: 4 })
+        // Take the first and leave it asking a question, so a card is open with an answer to give.
+        const taken = await call('next_brief', {})
+        expect(taken).toContain(`Waiting ${scheme}`)
+        const id = taken.match(/^id: (.+)$/m)![1]
+        await call('ask_user', { brief: id, question: 'Which currency?' })
+
+        await page.goto('/')
+        await page.getByRole('button', { name: /On this server/ }).click()
+        await page.keyboard.press('ControlOrMeta+k')
+        await page.getByRole('dialog', { name: 'Command palette' }).getByRole('combobox').fill('agents and briefs')
+        await page.keyboard.press('Enter')
+        await expect(page.locator('.brief-card', { hasText: `Waiting ${scheme}` }).locator('.brief-question')).toContainText(
+          'Which currency?',
+        )
+        await scan(page, 'agents tab')
+
+        await page.getByRole('button', { name: 'Brief', exact: true }).click()
+        await expect(page.getByRole('dialog', { name: 'New brief' })).toBeVisible()
+        await scan(page, 'new brief dialog')
+      })
+
       test('the command palette', async ({ page }) => {
         await page.goto('/')
         await page.getByRole('button', { name: /On this server/ }).click()

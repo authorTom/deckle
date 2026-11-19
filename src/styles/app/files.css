@@ -443,20 +443,33 @@
 
 /* ---------- Panel tabs: four in a narrow panel ----------
    Every tab keeps its icon; only the one you're on spells out its name, until
-   the panel is wide enough to hold all four. The count is live state — new
+   the panel is wide enough to hold all five. The count is live state — new
    agent work — so it takes the accent's fill. */
 .task-panel {
   container-type: inline-size;
   container-name: panel;
 }
 
+/* Out of sight, not out of the accessible name: a tab with a count is named
+   "Agents 2 waiting on you", never just "2 waiting on you". */
 .panel-tab:not(.active) .panel-tab-label {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
-@container panel (min-width: 470px) {
+@container panel (min-width: 540px) {
   .panel-tab:not(.active) .panel-tab-label {
-    display: inline;
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
   }
 }
 

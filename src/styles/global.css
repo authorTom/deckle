@@ -14,5 +14,6 @@
 @import './app/workspace.css'; /* Docked panels, tabs, editor panes, links, outline, menus, save state. */
 @import './app/interactions.css'; /* Micro-interactions, and editor content from the newer extensions. */
 @import './app/files.css'; /* Files beside notes, properties, projects, activity, review and compare. */
+@import './app/agents.css'; /* The Agents tab: briefs, the agents working them, and the New brief dialog. */
 @import './app/responsive.css'; /* Reduced motion, and the responsive layout. */
 @import './app/flourishes.css'; /* Ink, the appearance picker, and the resize crew. */

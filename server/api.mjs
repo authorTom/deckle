@@ -139,6 +139,7 @@ export function createApi({
   search,
   activity,
   mcp,
+  briefs,
   auth,
   libraryEnabled,
   libraryName,
@@ -719,6 +720,85 @@ export function createApi({
       throw methodNotAllowed(method)
     }
 
+    // -- briefs: work queued for agents ------------------------------------
+    if (head === 'briefs' && briefs) {
+      const sub = rest.join('/')
+      if (!sub) {
+        if (method === 'GET') {
+          const list = await briefs.list({
+            status: url.searchParams.get('status') || undefined,
+            agent: url.searchParams.get('agent') || undefined,
+            project: url.searchParams.get('project') || undefined,
+          })
+          return { status: 200, body: { count: list.length, briefs: list } }
+        }
+        if (method === 'POST') {
+          const body = await readBody(req)
+          const brief = await briefs.create({
+            project: requireString(body, 'project', { max: 300 }),
+            title: requireString(body, 'title', { max: 300 }),
+            instructions: requireString(body, 'instructions', { optional: true, max: 200_000 }),
+            agent: requireString(body, 'agent', { optional: true, max: 60 }),
+            priority: body.priority,
+            due: requireString(body, 'due', { optional: true, max: 20 }),
+            start: requireString(body, 'start', { optional: true, max: 20 }),
+            repeat: requireString(body, 'repeat', { optional: true, max: 20 }),
+            outputs: Array.isArray(body.outputs) ? body.outputs.filter((o) => typeof o === 'string') : undefined,
+            status: body.draft === true ? 'draft' : 'queued',
+            createdBy: token.name,
+          })
+          await log({ action: 'created', kind: 'brief', path: brief.id, message: brief.title })
+          return { status: 201, body: brief }
+        }
+        throw methodNotAllowed(method)
+      }
+      if (sub === 'detail' && method === 'GET') {
+        return { status: 200, body: await briefs.detail(requireString({ id: url.searchParams.get('id') }, 'id', { max: 1024 })) }
+      }
+      if (sub === 'claim' && method === 'POST') {
+        const { brief, expired, runDate } = await briefs.claim(token.name)
+        for (const lapsed of expired) {
+          await log({ action: 'released', kind: 'brief', path: lapsed.id, message: `${lapsed.agent} stopped reporting; back in the queue` })
+        }
+        if (brief) await log({ action: 'started', kind: 'brief', path: brief.id, message: brief.title })
+        return { status: 200, body: { brief, runDate: brief ? runDate : null } }
+      }
+      if (sub === 'progress' && method === 'POST') {
+        const body = await readBody(req)
+        const brief = await briefs.progress(requireString(body, 'brief', { max: 1024 }), token.name, requireString(body, 'entry', { max: 20_000 }))
+        await log({ action: 'reported progress on', kind: 'brief', path: brief.id, message: body.entry.split('\n')[0] })
+        return { status: 200, body: { ok: true, brief: brief.id } }
+      }
+      if (sub === 'ask' && method === 'POST') {
+        const body = await readBody(req)
+        const brief = await briefs.ask(requireString(body, 'brief', { max: 1024 }), token.name, requireString(body, 'question', { max: 20_000 }))
+        await log({ action: 'asked about', kind: 'brief', path: brief.id, message: body.question.split('\n')[0] })
+        return { status: 200, body: brief }
+      }
+      if (sub === 'complete' && method === 'POST') {
+        const body = await readBody(req)
+        const outcome = await briefs.complete(requireString(body, 'brief', { max: 1024 }), token.name, requireString(body, 'summary', { max: 20_000 }))
+        await log({ action: 'completed', kind: 'brief', path: outcome.brief.id, message: outcome.brief.title, count: outcome.delivered.length })
+        return { status: 200, body: outcome }
+      }
+      if (sub === 'output' && method === 'PUT') {
+        const { brief, path } = await briefs.outputPath(
+          requireString({ brief: url.searchParams.get('brief') }, 'brief', { max: 1024 }),
+          token.name,
+          requireString({ name: url.searchParams.get('name') }, 'name', { max: 300 }),
+        )
+        const briefLog = (event) => log({ ...event, brief: brief.id })
+        briefLog.actor = token.name
+        const outcome = await uploadFile(req, url, normalizeFilePath(path), briefLog)
+        await briefs.progress(brief.id, token.name, `Delivered [[${path.slice(brief.id.length + 1)}]].`)
+        return outcome
+      }
+      throw new ApiError(404, 'not_found', `no such briefs endpoint: ${method} /briefs/${sub}`)
+    }
+    if (head === 'agents' && !rest.length && method === 'GET' && briefs) {
+      return { status: 200, body: { agents: await briefs.agents() } }
+    }
+
     // -- activity --------------------------------------------------------
     if (head === 'activity' && !rest.length && method === 'GET') {
       const sinceRaw = url.searchParams.get('since')
@@ -1003,6 +1083,7 @@ export function createApi({
         }
       })
 
+    briefs?.touch(result.token.name)
     try {
       const outcome = await route(req, res, url, segments, result.token)
       if (outcome?.handled) return true // the handler wrote the response itself

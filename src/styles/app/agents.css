@@ -1,0 +1,539 @@
+/* ---------- Agents: briefs and the agents working them ----------
+   Set like the project list: neutral cards, status as a word on the neutral
+   scale (never a colour — see DESIGN.md), and the accent kept for live state,
+   which here is the count of briefs waiting on you, on the tab. */
+.agents-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 8px 12px;
+  list-style: none;
+  border-bottom: var(--rule-hair) solid var(--border);
+}
+
+.agent-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+}
+
+.agent-row svg {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.agent-name {
+  flex-shrink: 0;
+  font-weight: var(--fw-medium);
+  color: var(--text);
+}
+
+.agent-state {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brief-notice {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: var(--rule-hair) solid var(--border);
+  border-radius: 8px;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-ui);
+  color: var(--text-muted);
+}
+
+.brief-group + .brief-group {
+  margin-top: 4px;
+}
+
+.brief-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.brief-card {
+  padding: 8px 10px 10px;
+  border: var(--rule) solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.brief-card-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.brief-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 2px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.brief-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.brief-card-title {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.brief-card-title:hover {
+  color: var(--accent);
+}
+
+.brief-status {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border: var(--rule-hair) solid var(--border);
+  border-radius: 999px;
+  font-size: var(--fs-meta);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* The two states that wait on you read in full-strength text; the rest recede. */
+.brief-status.status-blocked,
+.brief-status.status-review {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
+.brief-card.status-done .brief-card-title,
+.brief-card.status-cancelled .brief-card-title {
+  color: var(--text-muted);
+}
+
+.brief-card-meta,
+.brief-card-counts {
+  margin: 4px 0 0 22px;
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
+.brief-card-counts {
+  display: flex;
+  gap: 10px;
+}
+
+.brief-progress {
+  display: flex;
+  gap: 6px;
+  margin: 6px 0 0 22px;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-ui);
+  color: var(--text-muted);
+}
+
+.brief-progress svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.brief-progress strong {
+  font-weight: var(--fw-medium);
+  color: var(--text);
+}
+
+.brief-progress-when {
+  color: var(--text-faint);
+}
+
+.brief-progress.stale .brief-progress-when {
+  color: var(--danger);
+}
+
+.brief-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0 0 22px;
+}
+
+.brief-question {
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+  border: var(--rule-hair) solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.brief-question svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+
+.brief-question p {
+  margin: 0;
+  font-size: var(--fs-ui);
+  line-height: var(--lh-ui);
+  white-space: pre-wrap;
+}
+
+.brief-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-label);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-faint);
+}
+
+.brief-section-note {
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: normal;
+}
+
+.brief-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: normal;
+  cursor: pointer;
+}
+
+.brief-link:hover {
+  color: var(--text);
+}
+
+.brief-empty {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+}
+
+.brief-files,
+.brief-attachments {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.brief-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 4px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.brief-file:hover {
+  background: var(--bg-hover);
+}
+
+.brief-file svg {
+  flex-shrink: 0;
+  color: var(--text-faint);
+}
+
+.brief-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brief-file-size {
+  flex-shrink: 0;
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+.brief-log {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.brief-log li {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 6px;
+  align-items: baseline;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-ui);
+}
+
+.brief-log-who {
+  font-weight: var(--fw-medium);
+  color: var(--text);
+}
+
+.brief-log-text {
+  min-width: 0;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.brief-log-when {
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.brief-actions,
+.brief-compose-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.brief-compose-actions {
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.brief-actions .btn-primary,
+.brief-actions .btn-secondary,
+.brief-actions .btn-quiet,
+.brief-compose-actions .btn-primary,
+.brief-compose-actions .btn-quiet {
+  padding: 6px 11px;
+  font-size: var(--fs-sm);
+  gap: 6px;
+}
+
+.brief-cancel {
+  margin-left: auto;
+  color: var(--text-muted);
+}
+
+.brief-compose textarea,
+.brief-field input,
+.brief-field select,
+.brief-field textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: var(--rule) solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-ui);
+  line-height: var(--lh-ui);
+}
+
+.brief-compose textarea,
+.brief-field textarea {
+  resize: vertical;
+}
+
+.brief-compose textarea:focus,
+.brief-field input:focus,
+.brief-field select:focus,
+.brief-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ---- The New brief dialog ---- */
+.modal.brief-modal {
+  width: min(92vw, 640px);
+  max-height: 86vh;
+}
+
+.brief-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px 20px;
+}
+
+.brief-form-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.brief-form-row-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.brief-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.brief-field > span:first-child,
+.brief-outputs legend,
+.brief-drop-head > span {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.brief-field-inline {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.brief-field-inline input {
+  width: auto;
+}
+
+.brief-hint {
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+
+.brief-drop {
+  padding: 10px 12px;
+  border: var(--rule) dashed var(--border);
+  border-radius: 8px;
+  transition: border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+}
+
+.brief-drop.dragging {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.brief-drop-head {
+  display: flex;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.brief-attachments li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: var(--fs-sm);
+}
+
+.brief-outputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.brief-outputs legend {
+  margin-bottom: 5px;
+  padding: 0;
+}
+
+.brief-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: var(--rule-hair) solid var(--border);
+  border-radius: 999px;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.brief-chip.on {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
+.brief-chip input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.brief-error {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--danger);
+}
+
+.brief-footer {
+  gap: 8px;
+}
+
+@media (max-width: 640px) {
+  .brief-form-row-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .brief-form-row,
+  .brief-form-row-4 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .brief-form {
+    padding: 12px 16px 16px;
+  }
+}

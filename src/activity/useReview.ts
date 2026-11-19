@@ -36,7 +36,19 @@ export function useReview(dir: FileSystemDirectoryHandle | null, events: Activit
 
   const markAll = useCallback(() => mutate((s) => reviewAll(s, events)), [mutate, events])
 
-  return { pending, reviewed, toggle, markAll }
+  /** Sign off a batch at once — everything an agent wrote for one brief, say. */
+  const markReviewed = useCallback(
+    (batch: ActivityEvent[]) =>
+      mutate((s) =>
+        batch.reduce(
+          (store, event) => (isReviewable(event) && !isReviewed(store, event) ? setReviewed(store, event, true, events) : store),
+          s,
+        ),
+      ),
+    [mutate, events],
+  )
+
+  return { pending, reviewed, toggle, markAll, markReviewed }
 }
 
 export type ReviewApi = ReturnType<typeof useReview>

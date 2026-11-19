@@ -6,6 +6,7 @@ import type { Editor } from '@tiptap/react'
 import {
   Activity,
   Bookmark,
+  Bot,
   Columns2,
   FileDown,
   FolderInput,
@@ -51,6 +52,8 @@ export interface CommandContext {
   setExportOpen: (open: boolean) => void
   toggleProjects: () => void
   toggleActivity: () => void
+  toggleAgents: () => void
+  openNewBrief: () => void
   toggleTasks: () => void
   toggleBookmarks: () => void
   setShortcutsOpen: (open: boolean) => void
@@ -89,6 +92,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
     setExportOpen,
     toggleProjects,
     toggleActivity,
+    toggleAgents,
+    openNewBrief,
     toggleTasks,
     toggleBookmarks,
     setShortcutsOpen,
@@ -198,6 +203,20 @@ export function buildCommands(ctx: CommandContext): Command[] {
       icon: FolderKanban,
       keywords: 'projects work agent hermes status overview folders',
       run: toggleProjects,
+    },
+    {
+      id: 'agents',
+      label: 'Agents and briefs',
+      icon: Bot,
+      keywords: 'agents briefs queue work hermes claude review approve running pull',
+      run: toggleAgents,
+    },
+    {
+      id: 'new-brief',
+      label: 'New brief for an agent',
+      icon: Plus,
+      keywords: 'brief task job agent hermes queue assign instructions work stream delegate',
+      run: () => openNewBrief(),
     },
     {
       id: 'activity',

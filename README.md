@@ -60,12 +60,25 @@ makes is as recoverable as your own.
 
 **For your agent's work**
 
+- **Briefs: hand an agent work, and get it back.** In the **Agents** tab,
+  write a brief — the project, instructions, files to work from (dropped in,
+  folders and ZIPs included), what you want back (Word, PowerPoint, Excel,
+  PDF…), and optionally the agent, a priority, dates and a repeat. An agent
+  checking on a schedule takes the next one with `next_brief`, reports
+  progress you see live on the card, asks you a question if it is stuck, and
+  delivers files into the brief for you to **Approve** or send back with
+  **Request changes**. A repeating brief is a work stream, each run filed in a
+  dated folder. Deckle never runs anything itself: the agent pulls. A brief is
+  a folder of plain files (`Brief.md`, `Context/`, `Output/`, `Run.md`), so it
+  can be written, read and backed up with anything.
 - **An MCP server** at `/api/v1/mcp`, so an agent such as Hermes can use
   Deckle directly: `search`, `read`, `list`, `list_projects`,
-  `recent_activity`, `list_tasks`, `list_bookmarks`, `write_note`,
-  `edit_note`, `save_file`, `create_project`, `update_project`,
-  `log_progress`, `add_task`, `update_task`, `delete_task`, `save_bookmark`,
-  `move` and `delete`. An agent can hand you a task — "review this report" —
+  `get_project_context`, `recent_activity`, `list_briefs`, `list_tasks`,
+  `list_bookmarks`, `write_note`, `edit_note`, `save_file`, `create_project`,
+  `update_project`, `log_progress`, `next_brief`, `report_progress`,
+  `ask_user`, `deliver_file`, `complete_brief`, `create_brief`, `add_task`,
+  `update_task`, `delete_task`, `save_bookmark`, `move` and `delete`. An
+  agent can hand you a task — "review this report" —
   that lands in your planner, and change one passage of a note without
   rewriting the whole thing. It uses the same tokens
   as the REST API, and a read-only token is offered the read tools only. See
@@ -358,6 +371,7 @@ Only relevant when the server library is enabled.
 | `DECKLE_API_CORS_ORIGINS` | *(none)* | Origins allowed to call `/api/v1` from a browser |
 | `DECKLE_MAX_FILE_MB` | `100` | The largest single file the library accepts |
 | `DECKLE_PROJECTS_DIR` | `Projects` | The folder projects live in |
+| `DECKLE_BRIEF_LEASE_MINUTES` | `30` | How long an agent may go without reporting progress on a brief before it goes back in the queue |
 | `TZ` | *(UTC)* | Time zone for the activity feed and project logs, e.g. `Europe/London` |
 | `DECKLE_PORT` | `8080` | Host port (compose only) |
 
@@ -533,6 +547,12 @@ curl -H "Authorization: Bearer $TOKEN" -T report.pdf \
 | `PUT` | `/files/{path}` | Store any file from the raw body; a replaced file goes to the bin (`overwrite`, `message`) |
 | `DELETE` | `/files/{path}` | To the recycle bin (`?permanent=true` to erase) |
 | `GET` | `/activity` | What agents changed, newest first (`since`, `project`, `actor`, `path`, `limit`) |
+| `GET` `POST` | `/briefs` | List briefs, most pressing first (`status`, `project`, `agent`), or queue one |
+| `GET` | `/briefs/detail` | One brief, with instructions, run log and the project's shared context (`id`) |
+| `POST` | `/briefs/claim` | Take the next brief for this token, or none |
+| `POST` | `/briefs/progress` `/briefs/ask` `/briefs/complete` | Report progress, ask a question, or hand a brief back for review |
+| `PUT` | `/briefs/output` | Deliver a file into a brief you hold (`brief`, `name`, `message`) |
+| `GET` | `/agents` | Each token's last request, last check for work, and current brief |
 | `POST` | `/mcp` | The MCP server — see [Connecting an agent](#connecting-an-agent) |
 | `GET` | `/folders` | The folder tree, with its notes and files |
 | `POST` | `/folders` | Create a folder, including missing parents |

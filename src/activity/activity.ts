@@ -21,8 +21,10 @@ export interface ActivityEvent {
   actor: string
   via?: 'api' | 'mcp'
   action: string
-  kind?: 'note' | 'file' | 'folder' | 'project' | 'task' | 'bookmark'
+  kind?: 'note' | 'file' | 'folder' | 'project' | 'task' | 'bookmark' | 'brief'
   path?: string
+  /** For a file delivered for a brief: the brief's folder. */
+  brief?: string
   to?: string
   project?: string
   size?: number
@@ -87,6 +89,15 @@ export function describeEvent(event: ActivityEvent): string {
 }
 
 /** The newest event about a path — the file's provenance, for the viewer. */
+/**
+ * A progress report on a brief: listed in the feed, but not news — the brief's
+ * card already shows the latest line, and a working agent sends one every few
+ * minutes. Not counted as unseen.
+ */
+export function isChatter(event: ActivityEvent): boolean {
+  return event.kind === 'brief' && event.action === 'reported progress on'
+}
+
 export function lastEventFor(events: ActivityEvent[], path: string): ActivityEvent | null {
   return events.find((e) => e.to === path || (e.path === path && !e.to)) ?? null
 }
