@@ -416,6 +416,7 @@ export default function TaskPanel({
               key={id}
               type="button"
               role="tab"
+              data-tab={id}
               aria-selected={tab === id}
               className={`panel-tab${tab === id ? ' active' : ''}`}
               onClick={() => onTabChange(id)}

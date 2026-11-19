@@ -19,6 +19,7 @@ import {
   type FlightOrigin,
 } from '../lib/motion'
 import type { LibraryFile } from '../fs/library'
+import { PHONE_QUERY } from '../hooks/useMediaQuery'
 
 /**
  * The bubble menu's settings, kept as constants: TipTap 3's BubbleMenu sends a
@@ -209,6 +210,10 @@ export default function EditorPane({
   useEffect(() => {
     if (!editor || !ownedFocusAtMount.current) return
     if (shouldClaimFocus && !shouldClaimFocus()) return
+    // On a phone the caret is the keyboard: claiming it on every open would
+    // throw half the screen over a note the person came to read. Only a note
+    // that was just created — where writing is the whole point — takes it.
+    if (!isNew && window.matchMedia?.(PHONE_QUERY).matches) return
     // Never from something the person is already typing in — the command
     // palette opened while the note was still loading, say. The keystrokes
     // meant for it would land in the note instead.

@@ -250,3 +250,28 @@ test('a brief written in the app is worked by an agent over MCP, then approved',
   expect(detail.status).toBe('done')
   expect(detail.runLog).toContain('· you — **Approved.**')
 })
+
+test.describe('on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+
+  test('the tab bar reaches every section, and back returns to the note', async ({ page }) => {
+    await page.goto('/')
+    await page.getByRole('button', { name: /On this server/ }).click()
+    const bar = page.getByRole('navigation', { name: 'Sections' })
+    await expect(bar).toBeVisible()
+
+    await bar.getByRole('button', { name: /^Files/ }).click()
+    await expect(page.getByRole('textbox', { name: 'Search notes and files' })).toBeInViewport()
+    await expect(bar.getByRole('button', { name: /^Files/ })).toHaveAttribute('aria-current', 'page')
+
+    for (const section of ['Projects', 'Agents', 'Tasks']) {
+      await bar.getByRole('button', { name: new RegExp(`^${section}`) }).click()
+      await expect(page.getByRole('tab', { name: new RegExp(`^${section}`), selected: true })).toBeVisible()
+    }
+
+    // The system back gesture leaves the section rather than the app.
+    await page.goBack()
+    await expect(bar.getByRole('button', { name: /^Note/ })).toHaveAttribute('aria-current', 'page')
+    await expect(page.getByRole('textbox', { name: 'File name' })).toBeInViewport()
+  })
+})

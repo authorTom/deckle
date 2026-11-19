@@ -35,3 +35,12 @@ export function useMediaQuery(query: string): boolean {
  * two have to agree or a drawer opens with no scrim behind it.
  */
 export const COMPACT_QUERY = '(max-width: 900px)'
+
+/**
+ * A phone: narrow enough that the app stops being a desk with drawers and
+ * becomes a set of full-screen sections under a bottom tab bar. Kept in step
+ * with the `max-width: 640px` phone block in responsive.css. Landscape phones
+ * fall outside it on purpose — a bottom bar would cost a fifth of their height,
+ * and the compact drawers already fit them.
+ */
+export const PHONE_QUERY = '(max-width: 640px)'

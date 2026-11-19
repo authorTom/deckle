@@ -216,6 +216,395 @@
 }
 
 
+/* ---------- Phone ----------
+   Below 640px the desk metaphor stops working: there is no room for a drawer
+   to share the screen with the note, and the icons that open them sit at the
+   top edge, as far from a thumb as the screen allows. So a phone gets a
+   different shape, built from the same parts:
+
+   - a tab bar along the bottom — Note, Files, Projects, Agents, Tasks — so
+     every section is one labelled tap away;
+   - each section is a full screen above that bar, not a drawer over a dimmed
+     sliver of note;
+   - while writing, the bar steps aside and the formatting row takes its place,
+     sitting on the keyboard instead of at the top of the page;
+   - menus and dialogs rise from the bottom edge as sheets.
+
+   Keyed to `.app.phone`, which App sets from the same query, so the CSS and
+   the behaviour (history entries, the keyboard hook) can't disagree. */
+.mobile-nav,
+.menu-scrim {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  :root {
+    --mobile-nav-h: calc(58px + env(safe-area-inset-bottom));
+  }
+
+  /* The bar is fixed; the app makes room for it rather than sliding under. */
+  .app.phone {
+    padding-bottom: var(--mobile-nav-h);
+  }
+
+  .app.phone.writing,
+  .app.phone.focus-mode {
+    padding-bottom: 0;
+  }
+
+  /* ---- The tab bar ---- */
+  .app.phone .mobile-nav {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    height: var(--mobile-nav-h);
+    padding: 0 max(4px, env(safe-area-inset-right)) env(safe-area-inset-bottom)
+      max(4px, env(safe-area-inset-left));
+    background: var(--bg);
+    border-top: var(--rule) solid var(--border);
+  }
+
+  .app.phone.writing .mobile-nav,
+  .app.phone.focus-mode .mobile-nav {
+    display: none;
+  }
+
+  .mobile-nav-item {
+    flex: 1;
+    min-width: 0;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: var(--fs-meta);
+    font-weight: var(--fw-medium);
+    -webkit-tap-highlight-color: transparent;
+    transition: color var(--dur-fast) var(--ease-out);
+  }
+
+  /* Position is stated with the line, as it is on the editor tabs — drawn on
+     the bar's top edge, over its rule, and grown from the centre. */
+  .mobile-nav-item::before {
+    content: '';
+    position: absolute;
+    top: calc(-1 * var(--rule));
+    left: 26%;
+    right: 26%;
+    height: 2px;
+    border-radius: 0 0 2px 2px;
+    background: var(--accent);
+    transform: scaleX(0);
+    transition: transform var(--dur-base) var(--ease-out);
+  }
+
+  .mobile-nav-item.active {
+    color: var(--accent);
+  }
+
+  .mobile-nav-item.active::before {
+    transform: none;
+  }
+
+  .mobile-nav-item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -4px;
+    border-radius: 10px;
+  }
+
+  .mobile-nav-icon {
+    position: relative;
+    display: inline-flex;
+    transition: transform var(--dur-fast) var(--ease-out);
+  }
+
+  /* A press answers the finger before the screen has changed. */
+  .mobile-nav-item:active .mobile-nav-icon {
+    transform: scale(0.9);
+  }
+
+  .mobile-nav-count {
+    position: absolute;
+    top: -6px;
+    left: calc(100% - 9px);
+    min-width: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    /* A ring of the bar's own colour, so the badge cuts cleanly out of the
+       icon it overlaps instead of sitting on its strokes. */
+    box-shadow: 0 0 0 2px var(--bg);
+    background: var(--accent);
+    color: var(--accent-contrast);
+    font-size: var(--fs-label);
+    font-weight: var(--fw-semi);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.5;
+    text-align: center;
+  }
+
+  .mobile-nav-label {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ---- Sections are screens ----
+     Full width, ending at the bar so their last rows aren't hidden behind it.
+     No scrim and no shadow: nothing is behind them to dim or float above. */
+  .app.phone .sidebar-dock,
+  .app.phone .task-dock {
+    width: 100% !important;
+    height: auto;
+    bottom: var(--mobile-nav-h);
+    box-shadow: none;
+  }
+
+  .app.phone .scrim.show {
+    display: none;
+  }
+
+  .app.phone .sidebar,
+  .app.phone .task-panel {
+    border-right: none;
+    padding-bottom: 0;
+    background: var(--bg);
+  }
+
+  /* The bar does the hamburger's job, and the sidebar's section shortcuts. */
+  .app.phone .hamburger,
+  .app.phone .sidebar-section-link {
+    display: none;
+  }
+
+  /* Each screen's header reads as its title. */
+  .app.phone .sidebar-header,
+  .app.phone .task-header {
+    min-height: 56px;
+    padding: 8px 8px 8px 16px;
+  }
+
+  .app.phone .sidebar-title {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semi);
+    color: var(--text);
+  }
+
+  .app.phone .sidebar-search {
+    margin: 4px 16px 10px;
+    padding: 9px 12px;
+  }
+
+  /* The panel's tab row becomes a title plus whatever the bar doesn't hold.
+     Projects, Agents and Tasks have their own tabs below, so here they only
+     appear as the heading of the screen you're on; Activity and Bookmarks
+     stay as icons on the right, the way in to the two sections without one. */
+  .app.phone .panel-tabs {
+    flex: 1;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .app.phone .panel-tab:is([data-tab='projects'], [data-tab='agents'], [data-tab='tasks']):not(.active) {
+    display: none;
+  }
+
+  .app.phone .panel-tab.active {
+    order: -1;
+    margin-right: auto;
+    padding: 0;
+    background: transparent;
+    color: var(--text);
+    font-size: var(--fs-lg);
+    pointer-events: none;
+  }
+
+  .app.phone .panel-tab.active > .lucide {
+    display: none;
+  }
+
+  .app.phone .panel-tab:not(.active) {
+    width: 42px;
+    height: 42px;
+    justify-content: center;
+    padding: 0;
+    position: relative;
+  }
+
+  .app.phone .panel-tab:not(.active) .panel-tab-count {
+    position: absolute;
+    top: 3px;
+    right: 0;
+  }
+
+  /* The bar's Note tab is the way back; a close button would be a second one. */
+  .app.phone .task-header > .icon-btn {
+    display: none;
+  }
+
+  /* ---- The note ----
+     Side-by-side panes have no meaning one thumb wide. */
+  .app.phone .tab-split-btn,
+  .app.phone .menu-item[data-id='split'] {
+    display: none;
+  }
+
+  .app.phone .topbar {
+    min-height: 52px;
+    gap: 4px;
+  }
+
+  /* Reading, the formatting row is noise; writing, it is the point. */
+  .app.phone .toolbar {
+    display: none;
+  }
+
+  /* While writing, the app is exactly the visible area above the keyboard,
+     and the formatting row is the last thing in the editor column — so it
+     sits on the keys, and the note scrolls in the space left between it and
+     the top bar. The open-notes strip steps out for the duration. */
+  .app.phone.writing {
+    height: var(--vv-h, 100%);
+  }
+
+  .app.phone.writing .tab-strip {
+    display: none;
+  }
+
+  .app.phone.writing .toolbar {
+    display: flex;
+    order: 10;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    gap: 4px;
+    padding: 5px max(8px, env(safe-area-inset-right))
+      calc(5px + env(safe-area-inset-bottom) * (1 - var(--kb-open, 0)))
+      max(8px, env(safe-area-inset-left));
+    border-top: var(--rule) solid var(--border);
+    border-bottom: none;
+    background: var(--bg-elevated);
+    /* The row scrolls sideways; the fade on its trailing edge says so. */
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  }
+
+  .app.phone.writing .toolbar-btn {
+    min-width: 42px;
+    height: 42px;
+    flex-shrink: 0;
+  }
+
+  .app.phone.writing .editor-wrap {
+    padding-bottom: 48px;
+  }
+
+  /* ---- Menus become sheets ---- */
+  .menu-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 69;
+    background: rgba(0, 0, 0, 0.4);
+    animation: sheet-scrim-in var(--dur-base) var(--ease-out);
+  }
+
+  .menu-popover,
+  .menu-popover.align-left,
+  .menu-popover.align-right {
+    position: fixed;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: 85dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 18px 8px calc(8px + env(safe-area-inset-bottom));
+    border-radius: 12px 12px 0 0;
+    border-bottom: none;
+    transform-origin: bottom center;
+    animation: sheet-in var(--dur-slow) var(--ease-out);
+  }
+
+  /* The grabber: the shape that says "this came up from the bottom". */
+  .menu-popover::before {
+    content: '';
+    position: absolute;
+    top: 7px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    border-radius: 999px;
+    background: var(--border);
+  }
+
+  .menu-item {
+    min-height: 48px;
+    padding: 10px 12px;
+    gap: 14px;
+    font-size: var(--fs-md);
+  }
+
+  .menu-item.separated {
+    padding-top: 14px;
+  }
+
+  /* Shortcuts name keys a phone doesn't have. */
+  .menu-item-hint {
+    display: none;
+  }
+
+  /* ---- Dialogs become sheets ----
+     Anchored to the bottom edge, where the thumb already is and where the
+     buttons at the end of a dialog end up within reach. The palette stays at
+     the top: it is a search field, and the keyboard will take the bottom. */
+  .modal-overlay {
+    align-items: flex-end;
+    padding: max(16px, env(safe-area-inset-top)) 0 0;
+  }
+
+  .modal {
+    width: 100%;
+    max-height: 92dvh;
+    border-bottom: none;
+    border-radius: 12px 12px 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    transform: translateY(32px);
+  }
+
+  .palette-overlay {
+    padding-top: max(10px, env(safe-area-inset-top));
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes sheet-scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* The palette's footer is a legend for arrow keys, Enter and Esc. */
+@media (pointer: coarse) {
+  .palette-footer {
+    display: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
