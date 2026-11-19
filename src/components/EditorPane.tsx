@@ -9,6 +9,7 @@ import NoteProperties from './NoteProperties'
 import { formatActions, listActions, type FormatAction } from './formatActions'
 import { libraryPathFor } from '../editor/image'
 import { editorExtensions } from '../editor/extensions'
+import { REHIGHLIGHT_META } from '../editor/highlight'
 import { serialize } from '../editor/markdown'
 import { joinFrontmatter, splitFrontmatter } from '../lib/frontmatter'
 import { resolveWikilink, type Backlink } from '../lib/wikilinks'
@@ -164,7 +165,9 @@ export default function EditorPane({
         'aria-label': paneLabel ? `${paneLabel} — note text` : 'Note text',
       },
     },
-    onUpdate: ({ editor }) => {
+    onUpdate: ({ editor, transaction }) => {
+      // Code blocks being coloured in once their languages load: no edit.
+      if (transaction.getMeta(REHIGHLIGHT_META)) return
       onContentChange(noteId, joinFrontmatter(frontmatterRef.current, serialize(editor)))
     },
     onFocus: onFocusPane,

@@ -162,3 +162,37 @@ test('the folder tree moves a note with the keyboard, no dragging needed', async
     })).status())
     .toBe(200)
 })
+
+test('code blocks are coloured once their languages load, without counting as an edit', async ({ page }) => {
+  const note = '# Snippet\n\n```js\nconst answer = 42\n```'
+  await page.request.put('/api/v1/notes/Code/Snippet.md', {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+    data: { content: note },
+  })
+  const languages: string[] = []
+  page.on('request', (r) => {
+    if (/\/assets\/languages-/.test(r.url())) languages.push(r.url())
+  })
+  await openLibrary(page)
+  await page.getByRole('textbox', { name: 'Search notes and files' }).fill('Snippet')
+  await page.getByRole('complementary').getByText('Snippet').first().click()
+  await expect(page.locator('.ProseMirror pre .hljs-keyword').first()).toHaveText('const')
+  expect(languages).toHaveLength(1)
+  // Colouring in changed no text: nothing unsaved, nothing written.
+  await expect(page.locator('.tab-dot')).toHaveCount(0)
+  await page.waitForTimeout(1200)
+  const saved = await api(page, '/notes/Code/Snippet.md')
+  expect(saved.content).toBe(note)
+})
+
+test('the first screen does not wait for the editor', async ({ page }) => {
+  const scripts: string[] = []
+  page.on('request', (r) => {
+    if (r.resourceType() === 'script') scripts.push(new URL(r.url()).pathname)
+  })
+  await page.goto('/')
+  await expect(page.getByRole('button', { name: /On this server/ })).toBeVisible()
+  expect(scripts.some((s) => /EditorPane-/.test(s))).toBe(false)
+  expect(scripts.some((s) => /languages-/.test(s))).toBe(false)
+})
+

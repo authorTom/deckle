@@ -13,6 +13,21 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
+  build: {
+    // The one chunk over Vite's 500 kB default is the editor, which loads on
+    // demand (see Workspace.tsx); the first screen needs well under half that.
+    chunkSizeWarningLimit: 750,
+    rollupOptions: {
+      output: {
+        // React changes far less often than the app; in a chunk of its own it
+        // stays cached across releases. The editor needs no rule: it is
+        // loaded on demand, so Rollup already gives it chunks of its own.
+        manualChunks(id) {
+          if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return 'react'
+        },
+      },
+    },
+  },
   server: {
     // The server library lives behind /api. Vite doesn't serve it, so proxy to a
     // locally running `node server/index.mjs` (DECKLE_SERVER_LIBRARY=true) to work on
