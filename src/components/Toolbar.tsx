@@ -52,7 +52,14 @@ function ActionButton({
       aria-pressed={isActive(editor)}
       tabIndex={tabIndex}
       onFocus={onFocus}
-      onClick={() => run(editor)}
+      // Pressing a format button must not take focus out of the note. With a
+      // mouse that only costs a caret blink; on a phone it drops the keyboard,
+      // so every tap of Bold would put the keyboard away and bring it back.
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => {
+        onFocus()
+        run(editor)
+      }}
     >
       <Icon size={18} />
     </button>

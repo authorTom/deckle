@@ -766,7 +766,7 @@ export default function Sidebar({
         <div className="sidebar-header-actions">
           <button
             type="button"
-            className="icon-btn"
+            className="icon-btn sidebar-section-link"
             onClick={onOpenProjects}
             title="Projects"
             aria-label="Projects"
@@ -775,7 +775,7 @@ export default function Sidebar({
           </button>
           <button
             type="button"
-            className="icon-btn"
+            className="icon-btn sidebar-section-link"
             onClick={onOpenTasks}
             title="Tasks (Ctrl/Cmd+Shift+A)"
             aria-label="Tasks"
@@ -784,7 +784,7 @@ export default function Sidebar({
           </button>
           <button
             type="button"
-            className="icon-btn"
+            className="icon-btn sidebar-section-link"
             onClick={onOpenBookmarks}
             title="Bookmarks"
             aria-label="Bookmarks"

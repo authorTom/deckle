@@ -60,7 +60,10 @@ import type { EnterFrom, FlightOrigin } from './lib/motion'
 import { useBacklinks } from './hooks/useBacklinks'
 import { useResizable } from './hooks/useResizable'
 import { useDeferredUnmount } from './hooks/useDeferredUnmount'
-import { COMPACT_QUERY, useMediaQuery } from './hooks/useMediaQuery'
+import { COMPACT_QUERY, PHONE_QUERY, useMediaQuery } from './hooks/useMediaQuery'
+import { usePhoneKeyboard } from './hooks/usePhoneKeyboard'
+import MobileNav, { type MobileSection } from './components/MobileNav'
+import { todayStr } from './tasks/dates'
 import { supportsDiskPicker } from './fs/library'
 
 /** `webkitdirectory` is how every browser exposes folder picking, but it isn't
@@ -145,6 +148,10 @@ export default function App() {
   // Below this width the three docked panels stop being columns and become
   // drawers over the editor, so at most one of them can usefully be open.
   const compact = useMediaQuery(COMPACT_QUERY)
+  // Narrower still, the drawers become full screens under a bottom tab bar,
+  // and while the person is writing that bar gives way to the formatting bar.
+  const phone = useMediaQuery(PHONE_QUERY)
+  const writing = usePhoneKeyboard(phone)
 
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const closeSidebar = useCallback(() => setSidebarOpen(false), [])
@@ -213,6 +220,49 @@ export default function App() {
     [tasksOpen, panelTab, compact],
   )
   const toggleTasks = useCallback(() => openPanelTab('tasks'), [openPanelTab])
+
+  /**
+   * The tab bar's one verb. Unlike the desktop toggles, going to the section
+   * you are already in keeps you there — a tab bar is a place, not a switch —
+   * and "Note" is simply every screen put away.
+   */
+  const goToSection = useCallback((section: MobileSection) => {
+    if (section === 'note') {
+      setSidebarOpen(false)
+      setTasksOpen(false)
+    } else if (section === 'files') {
+      setTasksOpen(false)
+      setSidebarOpen(true)
+    } else {
+      setSidebarOpen(false)
+      setPanelTab(section)
+      setTasksOpen(true)
+    }
+  }, [])
+
+  // On a phone a section is a screen, and the system back gesture should leave
+  // it rather than leave Deckle. Opening one pushes a single history entry;
+  // back pops it and puts the screens away. Moving between sections reuses the
+  // entry, and closing one from the UI takes its entry back off, so back never
+  // has to be pressed twice to go somewhere.
+  const screenOpen = phone && (sidebarOpen || tasksOpen)
+  useEffect(() => {
+    if (!screenOpen) {
+      if ((window.history.state as { deckleScreen?: boolean } | null)?.deckleScreen) {
+        window.history.back()
+      }
+      return
+    }
+    if (!(window.history.state as { deckleScreen?: boolean } | null)?.deckleScreen) {
+      window.history.pushState({ deckleScreen: true }, '')
+    }
+    const onPop = () => {
+      setSidebarOpen(false)
+      setTasksOpen(false)
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [screenOpen])
   const toggleBookmarks = useCallback(
     () => openPanelTab('bookmarks'),
     [openPanelTab],
@@ -242,6 +292,11 @@ export default function App() {
   })
   // Tasks (Todoist-style planner, stored in the library's .deckle/tasks.json)
   const tasks = useTasks(libraryDir)
+  // What the tab bar's Tasks badge counts: the same "Today" the planner shows.
+  const tasksDue = useMemo(() => {
+    const today = todayStr()
+    return tasks.store.tasks.filter((t) => !t.completedAt && !t.deletedAt && t.due && t.due <= today).length
+  }, [tasks.store.tasks])
 
   // Bookmarks (stored in the library's .deckle/bookmarks.json)
   const bookmarks = useBookmarks(libraryDir)
@@ -805,7 +860,16 @@ export default function App() {
 
   // ---- Ready: full app ----
   return (
-    <div className={`app${focusMode ? ' focus-mode' : ''}`}>
+    <div
+      className={[
+        'app',
+        focusMode ? 'focus-mode' : '',
+        phone ? 'phone' : '',
+        phone && writing ? 'writing' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+    >
       <div
         className="sidebar-dock"
         style={{ width: sidebarResize.size }}
@@ -982,6 +1046,23 @@ export default function App() {
         >
           <Minimize2 size={18} />
         </button>
+      )}
+
+      {phone && (
+        <MobileNav
+          current={
+            sidebarOpen
+              ? 'files'
+              : !tasksOpen
+                ? 'note'
+                : panelTab === 'projects' || panelTab === 'agents' || panelTab === 'tasks'
+                  ? panelTab
+                  : null
+          }
+          onGo={goToSection}
+          agentsCount={briefsNeedingYou}
+          tasksDue={tasksDue}
+        />
       )}
 
       <CommandPalette

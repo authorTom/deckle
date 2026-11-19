@@ -93,6 +93,12 @@ export default function OverflowMenu({
         <MoreHorizontal size={19} />
       </button>
 
+      {/* On a phone the menu rises from the bottom as a sheet, and this is the
+          dimmed page above it. Hidden everywhere else. It lives inside the
+          wrapper, so the outside-click listener ignores it — the tap is
+          handled here instead. */}
+      {open && <div className="menu-scrim" aria-hidden="true" onClick={() => setOpen(false)} />}
+
       {open && (
         <div
           id={menuId}
@@ -107,6 +113,7 @@ export default function OverflowMenu({
                 key={item.id}
                 type="button"
                 role="menuitem"
+                data-id={item.id}
                 disabled={item.disabled}
                 className={[
                   'menu-item',
