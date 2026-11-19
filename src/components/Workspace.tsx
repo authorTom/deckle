@@ -1,18 +1,26 @@
-import { useCallback, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { FilePlus, Upload } from 'lucide-react'
 import type { Editor as TiptapEditor } from '@tiptap/react'
 import TopBar from './TopBar'
 import Toolbar from './Toolbar'
 import NoteTabs from './NoteTabs'
-import EditorPane from './EditorPane'
 import EditorSkeleton from './EditorSkeleton'
-import FileViewer from './FileViewer'
 import type { AssetFile, LibraryFile, NoteFile } from '../fs/library'
 import type { ActivityEvent } from '../activity/activity'
 import type { Pane, SaveState } from '../hooks/useNotes'
 import type { Backlink } from '../lib/wikilinks'
 import type { EnterFrom, FlightOrigin } from '../lib/motion'
 import type { Theme } from '../hooks/useTheme'
+
+// The editor is most of the app's weight — ProseMirror, TipTap, a Markdown
+// parser — and none of it is needed to show the library, a file, or the gate.
+// So it, and the file viewer, arrive as chunks of their own: fetched in idle
+// time once the workspace is up (see the effect below), and waited for behind
+// the note-shaped skeleton if someone opens a note sooner than that.
+const loadEditorPane = () => import('./EditorPane')
+const loadFileViewer = () => import('./FileViewer')
+const EditorPane = lazy(loadEditorPane)
+const FileViewer = lazy(loadFileViewer)
 
 interface WorkspaceProps {
   /** Every note and file, for wikilinks — which may point at either. */
@@ -215,6 +223,22 @@ export default function Workspace({
     onFocusedEditorChange(focusedEditor)
   }, [focusedEditor, onFocusedEditorChange])
 
+  // Fetch the editor and the file viewer once the page has settled, so the
+  // first note opens without a wait — and so the service worker has them for
+  // offline use. Idle time where the browser has it; a short timer where not.
+  useEffect(() => {
+    const preload = () => {
+      void loadEditorPane()
+      void loadFileViewer()
+    }
+    if ('requestIdleCallback' in window) {
+      const id = window.requestIdleCallback(preload, { timeout: 2000 })
+      return () => window.cancelIdleCallback(id)
+    }
+    const id = setTimeout(preload, 300)
+    return () => clearTimeout(id)
+  }, [])
+
   const split = splitItem !== null
 
   // A note's images come from the library; a missing one shows as missing.
@@ -272,6 +296,7 @@ export default function Workspace({
       {focusedEditor && <Toolbar editor={focusedEditor} />}
 
       <div className={`panes${split ? ' split' : ''}`}>
+        <Suspense fallback={<EditorSkeleton />}>
         {libraryEmpty ? (
           <EmptyLibrary onNew={onNew} onImport={onOpenImport} />
         ) : activeAsset ? (
@@ -313,10 +338,12 @@ export default function Workspace({
         ) : (
           <EditorSkeleton />
         )}
+        </Suspense>
 
         {split && (
           <>
             <div className="pane-divider" aria-hidden="true" />
+            <Suspense fallback={<EditorSkeleton />}>
             {splitAsset ? (
               <FileViewer
                 key={`split-${splitAsset.id}`}
@@ -355,6 +382,7 @@ export default function Workspace({
             ) : (
               <EditorSkeleton />
             )}
+            </Suspense>
           </>
         )}
       </div>

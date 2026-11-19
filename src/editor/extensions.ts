@@ -4,9 +4,9 @@ import Link from '@tiptap/extension-link'
 import TaskList from '@tiptap/extension-task-list'
 import TaskItem from '@tiptap/extension-task-item'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
-import { createLowlight, common } from 'lowlight'
 import { Markdown } from 'tiptap-markdown'
 import { Wikilink } from './wikilink'
+import { LazyHighlight, lowlight } from './highlight'
 import { LibraryImage } from './image'
 import {
   MarkdownTable,
@@ -14,8 +14,6 @@ import {
   MarkdownTableHeader,
   MarkdownTableRow,
 } from './markdownTable'
-
-const lowlight = createLowlight(common)
 
 export interface EditorExtensionOptions {
   /** Turn an image `src` from the Markdown into something an <img> can load. */
@@ -44,6 +42,7 @@ export function editorExtensions({ resolveImage, resolveWikilink, onOpenWikilink
     MarkdownTableHeader,
     MarkdownTableCell,
     CodeBlockLowlight.configure({ lowlight }),
+    LazyHighlight,
     LibraryImage.configure({ resolve: resolveImage }),
     Wikilink.configure({ resolve: resolveWikilink, onOpen: onOpenWikilink }),
   ]
