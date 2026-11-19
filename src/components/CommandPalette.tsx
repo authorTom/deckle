@@ -165,12 +165,23 @@ export default function CommandPalette({
             onKeyDown={onKeyDown}
             placeholder="Type a command, or the name of a note or file…"
             aria-label="Command palette"
+            role="combobox"
+            aria-expanded={items.length > 0}
+            aria-controls="palette-list"
+            aria-autocomplete="list"
+            aria-activedescendant={items.length ? `palette-option-${index}` : undefined}
           />
         </div>
 
-        <div className="palette-list" ref={listRef}>
+        <div className="palette-list" ref={listRef} id="palette-list"
+          // Only a listbox while there is something in it; the "nothing
+          // matches" note is not an option.
+          role={items.length ? 'listbox' : undefined}
+          aria-label="Results"
+          tabIndex={-1}
+        >
           {items.length === 0 && (
-            <div className="palette-empty">
+            <div className="palette-empty" role="status">
               Nothing matches. Commands and note titles are searched; note
               contents are searched from the sidebar.
             </div>
@@ -201,8 +212,16 @@ export default function CommandPalette({
 
             return (
               <Fragment key={key}>
-                {header && <div className="palette-section">{header}</div>}
+                {/* Headers are visual grouping; a listbox may hold only options. */}
+                {header && (
+                  <div className="palette-section" aria-hidden="true">
+                    {header}
+                  </div>
+                )}
                 <div
+                  id={`palette-option-${i}`}
+                  role="option"
+                  aria-selected={i === index}
                   data-index={i}
                   className={`palette-item${i === index ? ' selected' : ''}`}
                   onMouseMove={() => setIndex(i)}

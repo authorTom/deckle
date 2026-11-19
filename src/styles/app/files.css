@@ -1,0 +1,929 @@
+/* =========================================================================
+   Files beside notes
+   A file opens in a pane the way a note does: a header saying what it is and
+   who put it there, then the file itself, as far as the browser can safely
+   show it. The file is content, so a document preview reads at document size;
+   the header around it is chrome and stays chrome-sized.
+   ========================================================================= */
+.file-pane .file-viewer {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  animation: note-in var(--dur-base) var(--ease-out);
+}
+
+.file-viewer-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px 12px 20px;
+  border-bottom: var(--rule) solid var(--border);
+}
+
+.file-viewer-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.file-viewer-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-viewer-type {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.file-viewer-provenance {
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-viewer-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.file-viewer-body {
+  flex: 1;
+  padding: 24px 32px;
+}
+
+.file-viewer-image {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.file-preview-image {
+  max-width: 100%;
+  height: auto;
+  border: var(--rule-hair) solid var(--border);
+  border-radius: 6px;
+}
+
+/* The browser's own PDF viewer brings its own chrome, so it gets the whole
+   pane, edge to edge. */
+.file-viewer-pdf {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+.file-preview-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 70vh;
+  border: 0;
+  background: var(--bg-elevated);
+}
+
+.file-viewer-pdf .file-preview-note {
+  margin: 0;
+  padding: 8px 20px;
+  border-top: var(--rule) solid var(--border);
+}
+
+.file-preview-audio {
+  width: 100%;
+  max-width: 560px;
+}
+
+.file-preview-video {
+  max-width: 100%;
+  max-height: 72vh;
+  border-radius: 6px;
+  background: var(--bg-elevated);
+}
+
+.file-preview-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 64px 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--fs-ui);
+  line-height: var(--lh-ui);
+}
+
+.file-preview-empty p {
+  margin: 0;
+  max-width: 44ch;
+}
+
+.file-preview-note {
+  margin: 10px 0 0;
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+  line-height: var(--lh-ui);
+}
+
+.file-preview-note a {
+  color: var(--accent);
+}
+
+/* Spreadsheets and CSV: a grid of figures, so tabular digits and a row
+   number column that stays put while the sheet scrolls sideways. */
+.file-table-wrap {
+  width: fit-content;
+  max-width: 100%;
+  overflow: auto;
+  border: var(--rule) solid var(--border);
+  border-radius: 8px;
+}
+
+.file-table {
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.file-table td,
+.file-table th {
+  padding: 5px 10px;
+  border-right: var(--rule-hair) solid var(--border);
+  border-bottom: var(--rule-hair) solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+  max-width: 40ch;
+  color: var(--text);
+}
+
+.file-table th {
+  position: sticky;
+  left: 0;
+  min-width: 3ch;
+  text-align: right;
+  font-weight: var(--fw-body);
+  color: var(--text-faint);
+  background: var(--bg-elevated);
+}
+
+.file-preview-text {
+  margin: 0;
+  padding: 16px 18px;
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-ui);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+  color: var(--text);
+}
+
+/* A Word document is a document: it reads in the note's column, at the
+   note's size. */
+.file-preview-doc {
+  max-width: 760px;
+  margin: 0 auto;
+  font-size: var(--fs-prose);
+  line-height: var(--lh-prose);
+  color: var(--text);
+}
+
+.file-preview-doc h1 {
+  margin: 1.4em 0 0.5em;
+  font-size: var(--fs-prose-h1);
+  font-weight: var(--fw-display);
+  letter-spacing: var(--track-display);
+  line-height: var(--lh-tight);
+}
+
+.file-preview-doc h2 {
+  margin: 1.4em 0 0.5em;
+  font-size: var(--fs-prose-h2);
+  font-weight: var(--fw-strong);
+  line-height: var(--lh-tight);
+}
+
+.file-preview-doc h3 {
+  margin: 1.4em 0 0.5em;
+  font-size: var(--fs-prose-h3);
+  font-weight: var(--fw-strong);
+  line-height: var(--lh-tight);
+}
+
+.file-preview-doc > :first-child {
+  margin-top: 0;
+}
+
+.file-preview-doc p {
+  margin: 0 0 0.85em;
+  white-space: pre-wrap;
+}
+
+.file-preview-doc .file-doc-bullet {
+  position: relative;
+  padding-left: 1.2em;
+  margin-bottom: 0.3em;
+}
+
+.file-preview-doc .file-doc-bullet::before {
+  content: '•';
+  position: absolute;
+  left: 0.25em;
+  color: var(--text-muted);
+}
+
+.file-preview-doc .file-table-wrap {
+  margin: 0.4em 0 1.2em;
+}
+
+.file-sheet-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.file-sheet-tab {
+  padding: 4px 10px;
+  border: var(--rule-hair) solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.file-sheet-tab:hover {
+  color: var(--text);
+}
+
+.file-sheet-tab.active {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--text);
+}
+
+.file-preview-slides {
+  display: grid;
+  gap: 14px;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.file-slide {
+  position: relative;
+  padding: 18px 22px 18px 54px;
+  border: var(--rule) solid var(--border);
+  border-radius: 12px;
+}
+
+.file-slide-number {
+  position: absolute;
+  left: 20px;
+  top: 20px;
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+.file-slide h3 {
+  margin: 0 0 6px;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semi);
+  line-height: var(--lh-tight);
+}
+
+.file-slide p {
+  margin: 0 0 4px;
+  font-size: var(--fs-ui);
+  line-height: var(--lh-ui);
+  color: var(--text-muted);
+}
+
+.file-viewer-links {
+  padding: 0 32px 40px;
+}
+
+.file-viewer-links .backlinks {
+  margin-top: 16px;
+}
+
+@container workspace (max-width: 560px) {
+  .file-viewer-body {
+    padding: 16px;
+  }
+
+  .file-viewer-links {
+    padding: 0 16px 32px;
+  }
+}
+
+/* ---------- A note's properties (its front matter) ----------
+   Shown, never rendered into the document: the strip sits above the text as
+   quiet metadata, and becomes the YAML it is when someone asks to edit it. */
+.note-properties {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 22px;
+  padding: 6px 6px 6px 12px;
+  border: var(--rule) solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+}
+
+.note-properties-list {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+}
+
+.note-property {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-ui);
+}
+
+.note-property dt {
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+
+.note-property dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.note-property-chip {
+  display: inline-block;
+  margin: 0 4px 2px 0;
+  padding: 0 7px;
+  border: var(--rule-hair) solid var(--border);
+  border-radius: 999px;
+  font-size: var(--fs-meta);
+  color: var(--text-muted);
+}
+
+.note-properties-edit {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+
+.note-properties.editing {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 10px;
+}
+
+.note-properties-source {
+  width: 100%;
+  padding: 8px 10px;
+  border: var(--rule) solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-ui);
+  resize: vertical;
+}
+
+.note-properties-source:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.note-properties-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ---------- Images inside notes ---------- */
+.ProseMirror img.note-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  vertical-align: middle;
+}
+
+.ProseMirror img.note-image.loading,
+.ProseMirror img.note-image.missing {
+  min-width: 120px;
+  min-height: 48px;
+  background: var(--bg-hover);
+}
+
+.ProseMirror img.note-image.missing {
+  outline: var(--rule) dashed var(--border);
+  outline-offset: -2px;
+}
+
+.ProseMirror img.ProseMirror-selectednode {
+  outline: 2px solid var(--accent);
+}
+
+/* ---------- Panel tabs: four in a narrow panel ----------
+   Every tab keeps its icon; only the one you're on spells out its name, until
+   the panel is wide enough to hold all four. The count is live state — new
+   agent work — so it takes the accent's fill. */
+.task-panel {
+  container-type: inline-size;
+  container-name: panel;
+}
+
+.panel-tab:not(.active) .panel-tab-label {
+  display: none;
+}
+
+@container panel (min-width: 470px) {
+  .panel-tab:not(.active) .panel-tab-label {
+    display: inline;
+  }
+}
+
+.panel-tab-count,
+.icon-btn-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.activity-trigger {
+  position: relative;
+}
+
+.icon-btn-count {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  min-width: 16px;
+  padding: 0 4px;
+  font-size: var(--fs-label);
+  pointer-events: none;
+}
+
+/* ---------- Projects ---------- */
+.projects-view,
+.activity-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.project-create {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: var(--rule) dashed var(--border);
+  border-radius: 8px;
+}
+
+.project-create input {
+  padding: 7px 9px;
+  border: var(--rule) solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-ui);
+}
+
+.project-create input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.project-create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.project-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-empty p {
+  margin: 0;
+  max-width: 36ch;
+}
+
+.project-empty code {
+  font-size: 0.95em;
+}
+
+.project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.project-card {
+  padding: 10px 12px;
+  border: var(--rule) solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.project-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-card-name {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.project-card-name:hover {
+  color: var(--accent);
+}
+
+.project-card-new {
+  flex-shrink: 0;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
+  color: var(--accent);
+}
+
+.project-status {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border: var(--rule-hair) solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.project-status.status-active {
+  color: var(--text);
+}
+
+.project-card-summary {
+  margin: 6px 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-ui);
+  color: var(--text-muted);
+}
+
+.project-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+
+.project-card-log {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.project-card-log:hover {
+  color: var(--text);
+}
+
+.project-card-tags {
+  margin-top: 6px;
+}
+
+/* ---------- Activity ---------- */
+.activity-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px 0;
+}
+
+.activity-filters select {
+  padding: 4px 6px;
+  border: var(--rule) solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.activity-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.activity-item {
+  display: flex;
+  gap: 10px;
+  padding: 8px 4px;
+}
+
+.activity-item + .activity-item {
+  border-top: var(--rule-hair) solid var(--border);
+}
+
+.activity-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-faint);
+}
+
+.activity-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.activity-line {
+  margin: 0;
+  font-size: var(--fs-ui);
+  line-height: var(--lh-ui);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.activity-actor {
+  font-weight: var(--fw-medium);
+  color: var(--text);
+}
+
+/* The thing that changed is somewhere you can go: a line, not a fill. */
+.activity-target {
+  padding: 0;
+  border: none;
+  border-bottom: var(--rule-hair) solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: none;
+  font: inherit;
+  font-weight: var(--fw-medium);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.activity-target:hover {
+  color: var(--accent);
+}
+
+.activity-target.plain {
+  border: none;
+  cursor: default;
+}
+
+.activity-target.plain:hover {
+  color: var(--text);
+}
+
+.activity-target.gone {
+  border: none;
+  color: var(--text-faint);
+  text-decoration: line-through;
+  cursor: default;
+}
+
+.activity-from {
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+
+.activity-message {
+  margin: 2px 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-ui);
+  color: var(--text);
+}
+
+.activity-meta {
+  margin: 2px 0 0;
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+
+.activity-project {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.activity-project:hover {
+  color: var(--accent);
+}
+
+/* New since you last looked: live state, so a dot of the accent. */
+.activity-fresh {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* ---------- Review queue ---------- */
+.activity-modes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 0;
+}
+
+.activity-switch {
+  display: inline-flex;
+  padding: 2px;
+  border: var(--rule) solid var(--border);
+  border-radius: 8px;
+}
+
+.activity-switch button {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.activity-switch button[aria-pressed='true'] {
+  background: var(--bg-active);
+  color: var(--text);
+  font-weight: var(--fw-medium);
+}
+
+.activity-review-all,
+.activity-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.activity-review-all:hover,
+.activity-action:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.activity-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0 0 -4px;
+}
+
+.activity-action[aria-pressed='true'] {
+  color: var(--accent);
+}
+
+/* Signed off: still in the record, but no longer asking for attention. */
+.activity-item.reviewed .activity-line,
+.activity-item.reviewed .activity-message {
+  color: var(--text-faint);
+}
+
+/* ---------- Compare (before an agent's change, against now) ---------- */
+.compare-modal {
+  width: min(900px, calc(100vw - 32px));
+}
+
+.compare-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px 10px;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.compare-key::before {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 2px;
+  content: '';
+  vertical-align: -1px;
+}
+
+.compare-key.removed::before {
+  background: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.compare-key.added::before {
+  background: color-mix(in srgb, #30a46c 40%, transparent);
+}
+
+.compare-stats {
+  font-variant-numeric: tabular-nums;
+}
+
+.compare-open {
+  margin-left: auto;
+  padding: 4px 10px;
+}
+
+.compare-body {
+  padding-top: 0;
+}
+
+.compare-diff {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.compare-line {
+  display: block;
+  padding: 0 8px;
+}
+
+.compare-sign {
+  display: inline-block;
+  width: 1.4em;
+  color: var(--text-faint);
+  user-select: none;
+}
+
+.compare-line.added {
+  background: color-mix(in srgb, #30a46c 16%, transparent);
+}
+
+.compare-line.removed {
+  background: color-mix(in srgb, var(--danger) 13%, transparent);
+}
+
+.compare-line.skipped {
+  padding: 4px 8px;
+  color: var(--text-faint);
+  font-style: italic;
+}

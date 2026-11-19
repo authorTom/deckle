@@ -1,0 +1,221 @@
+/* =========================================================================
+   Library gate
+   The one screen that is not the desk. There is no writing to stay out of the
+   way of yet, so this is where the system plays at full strength: the ink, a
+   real display step, and a vertical rhythm instead of a uniform gap. It used
+   to borrow .empty-state — a utility whose job is to be ignored — which is
+   exactly why it read flat.
+   ========================================================================= */
+.gate {
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* Behind the words, not over them: the drop lands, the promise stays legible
+   the whole way through. */
+.gate-bloom {
+  z-index: 0;
+}
+
+.gate-bloom span {
+  left: 50%;
+  top: 44%;
+}
+
+.gate-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 480px;
+  padding: 24px;
+  text-align: center;
+}
+
+.gate-inner.wide {
+  max-width: 680px;
+}
+
+/* Mark and wordmark set as one lockup rather than two stacked things — a
+   masthead, which is what the top of a first screen wants to be. */
+.gate-masthead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 32px;
+}
+
+.gate-mark {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.gate-wordmark {
+  font-size: var(--fs-brand);
+  font-weight: var(--fw-display);
+  letter-spacing: var(--track-display);
+  line-height: 1;
+  color: var(--text);
+}
+
+/* Display scale, in full ink. This sentence is the product's promise; it was
+   set at chrome size in --text-muted, which is the system's voice for a note's
+   timestamp. */
+.gate-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 0;
+  font-size: var(--fs-prose-h2);
+  font-weight: var(--fw-strong);
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  text-wrap: balance;
+}
+
+.gate-lede {
+  margin: 12px 0 0;
+  max-width: 46ch;
+  font-size: var(--fs-prose);
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.gate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 28px;
+}
+
+/* The reassurance, in the tier that is actually meant for asides. */
+.gate-footnote {
+  margin: 16px 0 0;
+  font-size: var(--fs-ui);
+  color: var(--text-faint);
+}
+
+/* ---------- Library gate: backend choice & server login ---------- */
+.library-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+  margin-top: 28px;
+  text-align: left;
+}
+
+/* The most consequential choice in the app, so it gets room and a top-to-
+   bottom reading order — icon, name, consequence — rather than three lines of
+   equal weight in a grey box. */
+.library-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 22px 20px;
+  border-radius: 12px;
+  border: var(--rule) solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  text-align: left;
+  transition: border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.library-option-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  transition: background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+/* The ink arrives on the option you are actually reaching for — a state, not
+   a decoration, so the accent is doing its documented job. */
+.library-option:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.library-option:hover .library-option-icon {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.library-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.library-option-title {
+  font-size: var(--fs-prose);
+  font-weight: var(--fw-semi);
+  line-height: 1.3;
+  color: var(--text);
+}
+
+.library-option-desc {
+  font-size: var(--fs-ui);
+  line-height: 1.5;
+}
+
+.library-login {
+  display: flex;
+  gap: 8px;
+  margin-top: 28px;
+}
+
+.library-login-input {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: var(--rule) solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: var(--fs-md);
+  min-width: 220px;
+}
+
+.library-login-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.library-login .btn-primary:disabled {
+  opacity: 0.55;
+}
+
+.library-login-error {
+  color: var(--danger);
+  font-size: var(--fs-ui);
+}
+
+@media (max-width: 620px) {
+  .library-options {
+    grid-template-columns: 1fr;
+  }
+
+  .library-login {
+    flex-direction: column;
+    width: 100%;
+    max-width: 320px;
+  }
+
+  .library-login-input {
+    min-width: 0;
+  }
+}

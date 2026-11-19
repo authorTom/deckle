@@ -15,6 +15,8 @@
 // it passes MAX_BYTES it is rolled to `activity.1.jsonl` (replacing any older
 // roll), which bounds it at twice that on disk.
 
+import { randomUUID } from 'node:crypto'
+
 const DATA_DIR = '.deckle'
 export const ACTIVITY_FILE = `${DATA_DIR}/activity.jsonl`
 const ROLLED_FILE = `${DATA_DIR}/activity.1.jsonl`
@@ -35,6 +37,8 @@ export function createActivityLog(
 ) {
   // One append at a time, so a roll can't interleave with a write.
   let chain = Promise.resolve()
+  /** Told about each event once it is on disk — the app's live stream. */
+  const listeners = new Set()
 
   /** The project a path belongs to, if it sits inside the projects folder. */
   function projectOf(path) {
@@ -52,12 +56,17 @@ export function createActivityLog(
    * Record one event. Never throws: a failed log line must not fail the write
    * it describes, which has already happened.
    *
+   * Each event gets an id, which is how the app remembers it was reviewed.
+   * `before` names the version-history snapshot holding what a note said
+   * before this write, so the app can show what changed.
+   *
    * @param {{ actor: string, action: string, path?: string, to?: string,
    *   kind?: 'note' | 'file' | 'folder' | 'project' | 'task' | 'bookmark',
-   *   size?: number, message?: string, project?: string, count?: number }} event
+   *   size?: number, message?: string, project?: string, count?: number,
+   *   before?: string }} event
    */
   function record(event) {
-    const entry = { at: now(), ...event }
+    const entry = { id: randomUUID(), at: now(), ...event }
     const project = event.project ?? projectOf(event.to ?? event.path)
     if (project) entry.project = project
     if (typeof entry.message === 'string') {
@@ -77,6 +86,13 @@ export function createActivityLog(
         }
       } catch (err) {
         console.warn('[deckle] could not write the activity log:', err?.message ?? err)
+      }
+      for (const listener of listeners) {
+        try {
+          listener(entry)
+        } catch {
+          // A listener's trouble is its own.
+        }
       }
     })
     chain = run
@@ -123,5 +139,11 @@ export function createActivityLog(
     return filtered.slice(0, limit)
   }
 
-  return { record, list, projectOf }
+  /** Call `listener(event)` after each event is written; returns an unsubscribe. */
+  function subscribe(listener) {
+    listeners.add(listener)
+    return () => listeners.delete(listener)
+  }
+
+  return { record, list, projectOf, subscribe }
 }

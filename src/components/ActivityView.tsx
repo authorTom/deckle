@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Activity,
   Bookmark,
+  Check,
+  CheckCheck,
+  GitCompareArrows,
   FileText,
   Folder,
   FolderKanban,
@@ -9,6 +12,8 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import type { ActivityEvent } from '../activity/activity'
+import { isReviewable } from '../activity/review'
+import type { ReviewApi } from '../activity/useReview'
 import { iconFor } from '../lib/fileTypes'
 import { dayHeading, toDateStr } from '../tasks/dates'
 
@@ -23,6 +28,9 @@ interface ActivityViewProps {
   kindAt: (path: string) => 'file' | 'folder' | null
   onOpen: (path: string) => void
   onOpenProject: (project: string) => void
+  review: ReviewApi
+  /** Show what a note said before this event changed it, against now. */
+  onCompare: (event: ActivityEvent) => void
 }
 
 const MAX_SHOWN = 300
@@ -70,9 +78,14 @@ export default function ActivityView({
   kindAt,
   onOpen,
   onOpenProject,
+  review,
+  onCompare,
 }: ActivityViewProps) {
   const [project, setProject] = useState('')
   const [actor, setActor] = useState('')
+  // Open on the queue when there is one: that is what someone checking in on
+  // an agent came for.
+  const [view, setView] = useState<'review' | 'all'>(() => (review.pending.length ? 'review' : 'all'))
 
   // Opening the feed is catching up: the badge clears straight away, but what
   // was new when it opened stays marked for as long as it is being read.
@@ -89,7 +102,8 @@ export default function ActivityView({
   const actors = useMemo(() => [...new Set(events.map((e) => e.actor))].sort(), [events])
 
   const groups = useMemo(() => {
-    const shown = events
+    const source = view === 'review' ? review.pending : events
+    const shown = source
       .filter((e) => (!project || e.project === project) && (!actor || e.actor === actor))
       .slice(0, MAX_SHOWN)
     const out: { day: string; events: ActivityEvent[] }[] = []
@@ -100,7 +114,7 @@ export default function ActivityView({
       else out.push({ day, events: [event] })
     }
     return out
-  }, [events, project, actor])
+  }, [events, review.pending, view, project, actor])
 
   if (!supported) {
     return (
@@ -120,6 +134,21 @@ export default function ActivityView({
 
   return (
     <div className="activity-view">
+      <div className="activity-modes">
+        <div className="activity-switch" role="group" aria-label="Show">
+          <button type="button" aria-pressed={view === 'review'} onClick={() => setView('review')}>
+            To review{review.pending.length ? ` (${review.pending.length})` : ''}
+          </button>
+          <button type="button" aria-pressed={view === 'all'} onClick={() => setView('all')}>
+            Everything
+          </button>
+        </div>
+        {view === 'review' && review.pending.length > 0 && (
+          <button type="button" className="activity-review-all" onClick={review.markAll}>
+            <CheckCheck size={14} aria-hidden="true" /> Mark all reviewed
+          </button>
+        )}
+      </div>
       {(projects.length > 1 || actors.length > 1) && (
         <div className="activity-filters">
           {projects.length > 1 && (
@@ -146,7 +175,16 @@ export default function ActivityView({
       )}
 
       <div className="task-body">
-        {events.length === 0 ? (
+        {view === 'review' && review.pending.length === 0 && events.length > 0 ? (
+          <div className="task-empty project-empty">
+            <CheckCheck size={22} aria-hidden="true" />
+            <p>Nothing waiting for review.</p>
+            <p>
+              When an agent saves or changes a note or file, it waits here until you mark it reviewed. Everything
+              it has done is under Everything.
+            </p>
+          </div>
+        ) : events.length === 0 ? (
           <div className="task-empty project-empty">
             <Activity size={22} aria-hidden="true" />
             <p>Nothing recorded yet.</p>
@@ -165,6 +203,9 @@ export default function ActivityView({
                   const target = event.to ?? event.path
                   const now = target ? kindAt(target) : null
                   const fresh = event.at > newSince.current
+                  const reviewable = isReviewable(event)
+                  const reviewed = reviewable && review.reviewed(event)
+                  const comparable = event.kind === 'note' && !!event.before && now === 'file'
                   // A project opens on its overview; a file opens in a tab; a
                   // folder is named but has nowhere to open; anything no
                   // longer there is struck through.
@@ -191,7 +232,10 @@ export default function ActivityView({
                     )
                   }
                   return (
-                    <li key={`${event.at}-${i}`} className={`activity-item${fresh ? ' fresh' : ''}`}>
+                    <li
+                      key={event.id ?? `${event.at}-${i}`}
+                      className={`activity-item${fresh ? ' fresh' : ''}${reviewed ? ' reviewed' : ''}`}
+                    >
                       <span className="activity-icon" aria-hidden="true">
                         <Icon size={15} />
                       </span>
@@ -222,8 +266,31 @@ export default function ActivityView({
                           )}
                           {event.via === 'mcp' ? ' · via MCP' : ''}
                         </p>
+                        {(comparable || reviewable) && (
+                          <div className="activity-actions">
+                            {comparable && (
+                              <button type="button" className="activity-action" onClick={() => onCompare(event)}>
+                                <GitCompareArrows size={13} aria-hidden="true" /> Compare
+                              </button>
+                            )}
+                            {reviewable && (
+                              <button
+                                type="button"
+                                className="activity-action"
+                                aria-pressed={reviewed}
+                                onClick={() => review.toggle(event)}
+                              >
+                                <Check size={13} aria-hidden="true" /> {reviewed ? 'Reviewed' : 'Mark reviewed'}
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
-                      {fresh && <span className="activity-fresh" aria-label="New since you last looked" />}
+                      {fresh && (
+                        <span className="activity-fresh">
+                          <span className="visually-hidden">New since you last looked</span>
+                        </span>
+                      )}
                     </li>
                   )
                 })}

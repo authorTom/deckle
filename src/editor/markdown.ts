@@ -1,4 +1,5 @@
 import type { Editor } from '@tiptap/react'
+import type { MarkdownStorage } from 'tiptap-markdown'
 
 /**
  * `[[Target]]` written as literal text, after ProseMirror's escaping.
@@ -24,5 +25,7 @@ export function unescapeWikilinks(markdown: string): string {
  * reset the cursor on every keystroke.
  */
 export function serialize(editor: Editor): string {
-  return unescapeWikilinks(editor.storage.markdown.getMarkdown())
+  // tiptap-markdown doesn't declare its storage on TipTap 3's Storage type.
+  const storage = editor.storage as unknown as { markdown: MarkdownStorage }
+  return unescapeWikilinks(storage.markdown.getMarkdown())
 }

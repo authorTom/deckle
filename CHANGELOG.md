@@ -8,10 +8,49 @@ here.
 
 ## [Unreleased]
 
-Security fixes from an audit of 3.0. **Read Changed** if you run the server
-library without a password and reach it by a host name.
+Security fixes from an audit of 3.0, and the review side of working with an
+agent. **Read Changed** if you run the server library without a password and
+reach it by a host name.
+
+### Added
+
+- **A review queue for agent work.** The Activity feed opens on **To review**:
+  every note and file an agent saved or changed that you haven't marked
+  reviewed, newest first. Mark one, or all. Reviewed is kept in the library
+  (`.deckle/review.json`), so it is the same on every device.
+- **Compare an agent's change.** A note an agent rewrote, edited or appended
+  to offers **Compare**: the version it replaced against the note now, line by
+  line. Activity events now carry an `id`, and a note write carries `before` —
+  the version-history snapshot it replaced.
+- **More MCP tools.** `edit_note` changes one passage of a note without
+  rewriting it, and refuses if the text has changed since the agent read it,
+  so it never undoes your edits. `add_task`, `update_task`, `delete_task` and
+  `list_tasks` let an agent put work in your planner — "review this report",
+  linked to the note — and see what you have asked for. `save_bookmark` and
+  `list_bookmarks` keep its sources. Read-only tokens get the two new list
+  tools.
+- **Live updates.** An agent's change reaches an open app the moment it is
+  made, over a stream from the server (`/api/library/events`), rather than on
+  the next fifteen-second check — which remains as the fallback.
+- **Installable.** A web app manifest, icons and a service worker: add Deckle
+  to a home screen or dock, and it opens with no network. The service worker
+  keeps the app itself and never notes; `/api` is not cached.
+- **Keyboard equivalents for everything the mouse can do in the note list.**
+  Alt/⌥+M moves the focused note or file to another folder — dragging,
+  without the mouse — and works on search results too. Alt/⌥+N starts a note
+  in the focused folder; Alt/⌥+Shift+N a subfolder. **Delete** on a focused
+  tab closes it.
 
 ### Changed
+
+- **The editor is TipTap 3** (from 2). Notes are written back exactly as
+  before — checked byte for byte across headings, lists, task lists, tables,
+  code, links, wikilinks and images.
+- **Quiet text is easier to read.** Timestamps, labels, hints and paths
+  (`text-faint`) now meet WCAG AA, 4.5:1, in every palette and both modes;
+  they sat near 3:1. `text-muted` darkened a step where needed to stay
+  stronger. Several palettes' accent moved slightly so that accent text on the
+  selection tint also meets 4.5:1: Deckle dark, Slate, Nord, Rose and Forest.
 
 - **Without a password, the library answers only hosts it knows.** Library
   requests must be addressed to `localhost`, an IP address, or a name in the
@@ -23,6 +62,18 @@ library without a password and reach it by a host name.
   unaffected.
 
 ### Fixed
+
+- **The command palette is announced to screen readers.** Its input is now a
+  combobox over a listbox of options, so moving through results says where
+  you are. Before, the results were silent.
+- **Accessibility.** The editor is named as a text field; the tab strip's
+  close buttons no longer nest a control inside a tab; the palette button's
+  name matches what it says; the hidden import pickers are labelled and out
+  of the tab order; search results are a button beside a Move button rather
+  than one inside the other; status dots carry text rather than a label a
+  screen reader ignores. Escape closes the Compare dialog.
+- **A note loading no longer takes the caret from the command palette** (or
+  any field) you have already started typing in.
 
 - **An older `.env` that set `NIB_PASSWORD` no longer comes up open.**
   `compose.yaml` passed only the `DECKLE_*` names into the container, so a

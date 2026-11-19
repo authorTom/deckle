@@ -35,7 +35,7 @@ import { contentTypeFor } from './mime.mjs'
 import { buildOpenApi } from './openapi.mjs'
 import { VERSION } from './version.mjs'
 import { ClientGoneError, writeZip } from './zip.mjs'
-import { isValidDateStr, nextOccurrence, todayStr } from './dates.mjs'
+import { createPlanner, optionalId, requireString } from './planner.mjs'
 
 const PREFIX = '/api/v1'
 
@@ -58,32 +58,6 @@ function parseIntParam(value, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER
 
 function boolParam(value) {
   return value === '1' || value === 'true' || value === 'yes'
-}
-
-function requireString(body, field, { optional = false, max = 100_000 } = {}) {
-  const value = body?.[field]
-  if (value === undefined || value === null) {
-    if (optional) return undefined
-    throw new ApiError(400, 'invalid_body', `"${field}" is required`)
-  }
-  if (typeof value !== 'string') {
-    throw new ApiError(400, 'invalid_body', `"${field}" must be a string`)
-  }
-  if (value.length > max) {
-    throw new ApiError(400, 'invalid_body', `"${field}" is too long`)
-  }
-  return value
-}
-
-/** A reference to another record: a non-empty string, or null for "none". */
-function optionalId(body, field) {
-  const value = body?.[field]
-  if (value === undefined) return undefined
-  if (value === null) return null
-  if (typeof value !== 'string' || !value) {
-    throw new ApiError(400, 'invalid_body', `"${field}" must be an id string or null`)
-  }
-  return value
 }
 
 /**
@@ -171,6 +145,8 @@ export function createApi({
   corsOrigins = [],
 }) {
   const allowAllOrigins = corsOrigins.includes('*')
+  const { filterTasks, createTask, patchTask, deleteTask, createBookmark, patchBookmark } =
+    createPlanner(store)
 
   function corsHeaders(req) {
     if (!corsOrigins.length) return {}
@@ -343,11 +319,12 @@ export function createApi({
       content = `${edit.text}${separator}${current.content}`
     }
 
-    const { note } = await store.writeNote(current.path, content, 'agent')
+    const { note, before } = await store.writeNote(current.path, content, 'agent')
     await log({
       action: edit.kind === 'content' ? 'replaced' : edit.kind === 'append' ? 'appended to' : 'prepended to',
       kind: 'note',
       path: note.path,
+      before,
     })
     return note
   }
@@ -444,211 +421,6 @@ export function createApi({
     }
   }
 
-  // ---- Tasks ---------------------------------------------------------------
-
-  function validatePriority(value) {
-    if (value === undefined) return undefined
-    const priority = Number(value)
-    if (![1, 2, 3, 4].includes(priority)) {
-      throw new ApiError(400, 'invalid_body', '"priority" must be 1, 2, 3 or 4')
-    }
-    return priority
-  }
-
-  function validateDue(value) {
-    if (value === undefined) return undefined
-    if (value === null) return null
-    // A real date, not just the right shape: "2026-02-31" used to be stored,
-    // and then sorted and filtered as a string no calendar has.
-    if (!isValidDateStr(value)) {
-      throw new ApiError(400, 'invalid_body', '"due" must be a real date as "YYYY-MM-DD", or null')
-    }
-    return value
-  }
-
-  function validateRecurrence(value) {
-    if (value === undefined) return undefined
-    if (value === null) return null
-    const freq = value?.freq
-    const interval = Number(value?.interval ?? 1)
-    if (!['daily', 'weekly', 'monthly', 'yearly'].includes(freq)) {
-      throw new ApiError(
-        400,
-        'invalid_body',
-        '"recurrence.freq" must be daily, weekly, monthly or yearly',
-      )
-    }
-    if (!Number.isFinite(interval) || interval < 1) {
-      throw new ApiError(400, 'invalid_body', '"recurrence.interval" must be 1 or more')
-    }
-    return { freq, interval: Math.floor(interval) }
-  }
-
-  function filterTasks(tasks, url) {
-    const filter = url.searchParams.get('filter') ?? 'all'
-    const project = url.searchParams.get('project')
-    const includeCompleted = boolParam(url.searchParams.get('include_completed'))
-    const includeDeleted = boolParam(url.searchParams.get('include_deleted'))
-    const stamp = todayStr()
-
-    return tasks.filter((task) => {
-      if (task.deletedAt && !includeDeleted && filter !== 'deleted') return false
-      if (!task.deletedAt && filter === 'deleted') return false
-      if (task.completedAt && !includeCompleted && filter !== 'completed') return false
-      if (!task.completedAt && filter === 'completed') return false
-      if (project && task.projectId !== project) return false
-
-      if (filter === 'inbox') return task.projectId === null
-      if (filter === 'today') return !!task.due && task.due <= stamp
-      if (filter === 'upcoming') return !!task.due && task.due > stamp
-      if (filter === 'overdue') return !!task.due && task.due < stamp
-      return true
-    })
-  }
-
-  async function createTask(body) {
-    const title = requireString(body, 'title', { max: 1000 }).trim()
-    if (!title) throw new ApiError(400, 'invalid_body', '"title" cannot be empty')
-    const projectId = optionalId(body, 'projectId') ?? null
-    const due = validateDue(body.due) ?? null
-    const priority = validatePriority(body.priority) ?? 4
-    const recurrence = validateRecurrence(body.recurrence) ?? null
-    const source =
-      typeof body.sourceNote === 'string' && body.sourceNote
-        ? { noteId: normalizeNotePath(body.sourceNote) }
-        : undefined
-
-    return await store.updateTasks((tasks) => {
-      if (projectId && !tasks.projects.some((p) => p.id === projectId)) {
-        throw new ApiError(404, 'not_found', `no project with id "${projectId}"`)
-      }
-      const task = {
-        id: randomUUID(),
-        title,
-        projectId,
-        due,
-        priority,
-        recurrence,
-        completedAt: null,
-        deletedAt: null,
-        createdAt: Date.now(),
-      }
-      if (source) task.source = source
-      tasks.tasks.push(task)
-      return task
-    })
-  }
-
-  async function patchTask(id, body) {
-    return await store.updateTasks((store_) => {
-      const task = store_.tasks.find((t) => t.id === id)
-      if (!task) throw new ApiError(404, 'not_found', `no task with id "${id}"`)
-
-      if (body.title !== undefined) {
-        const title = requireString(body, 'title', { max: 1000 }).trim()
-        if (!title) throw new ApiError(400, 'invalid_body', '"title" cannot be empty')
-        task.title = title
-      }
-      if (body.projectId !== undefined) {
-        const projectId = optionalId(body, 'projectId')
-        if (projectId !== null && !store_.projects.some((p) => p.id === projectId)) {
-          throw new ApiError(404, 'not_found', `no project with id "${projectId}"`)
-        }
-        task.projectId = projectId
-      }
-      if (body.due !== undefined) task.due = validateDue(body.due)
-      if (body.priority !== undefined) task.priority = validatePriority(body.priority)
-      if (body.recurrence !== undefined) task.recurrence = validateRecurrence(body.recurrence)
-      if (body.completed !== undefined) {
-        if (typeof body.completed !== 'boolean') {
-          throw new ApiError(400, 'invalid_body', '"completed" must be true or false')
-        }
-        if (!body.completed) {
-          task.completedAt = null
-        } else if (!task.completedAt) {
-          // Exactly what the app's checkbox does (toggleComplete in
-          // src/tasks/useTasks.ts): a recurring task with a due date moves on
-          // to its next occurrence rather than completing. The API used to
-          // complete it outright, ending the series for everyone.
-          if (task.recurrence && task.due) {
-            task.due = nextOccurrence(task.due, task.recurrence, todayStr())
-          } else {
-            task.completedAt = Date.now()
-          }
-        }
-      }
-      // Mutations above run on a freshly loaded copy, and updateTasks only
-      // writes once this returns — so a validation error part-way through
-      // leaves the file untouched rather than half-edited.
-      return task
-    })
-  }
-
-  // ---- Bookmarks -----------------------------------------------------------
-
-  function normalizeUrl(raw) {
-    const value = String(raw ?? '').trim()
-    if (!value) throw new ApiError(400, 'invalid_body', '"url" is required')
-    const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(value) ? value : `https://${value}`
-    let parsed
-    try {
-      parsed = new URL(withScheme)
-    } catch {
-      throw new ApiError(400, 'invalid_body', `"${value}" is not a valid URL`)
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new ApiError(400, 'invalid_body', 'bookmarks must be http or https URLs')
-    }
-    return parsed.toString()
-  }
-
-  async function createBookmark(body) {
-    const url = normalizeUrl(body?.url)
-    const collectionId = optionalId(body, 'collectionId') ?? null
-    return await store.updateBookmarks((data) => {
-      if (collectionId && !data.collections.some((c) => c.id === collectionId)) {
-        throw new ApiError(404, 'not_found', `no collection with id "${collectionId}"`)
-      }
-      const bookmark = {
-        id: randomUUID(),
-        url,
-        title: (requireString(body, 'title', { optional: true, max: 500 }) ?? '').trim() ||
-          new URL(url).hostname.replace(/^www\./, ''),
-        comment: requireString(body, 'comment', { optional: true, max: 10_000 }) ?? '',
-        collectionId,
-        createdAt: Date.now(),
-      }
-      if (typeof body.sourceNote === 'string' && body.sourceNote) {
-        bookmark.source = { noteId: normalizeNotePath(body.sourceNote) }
-      }
-      data.bookmarks.push(bookmark)
-      return bookmark
-    })
-  }
-
-  async function patchBookmark(id, body) {
-    return await store.updateBookmarks((data) => {
-      const bookmark = data.bookmarks.find((b) => b.id === id)
-      if (!bookmark) throw new ApiError(404, 'not_found', `no bookmark with id "${id}"`)
-
-      if (body.url !== undefined) bookmark.url = normalizeUrl(body.url)
-      if (body.title !== undefined) {
-        bookmark.title = requireString(body, 'title', { max: 500 })
-      }
-      if (body.comment !== undefined) {
-        bookmark.comment = requireString(body, 'comment', { max: 10_000 })
-      }
-      if (body.collectionId !== undefined) {
-        const collectionId = optionalId(body, 'collectionId')
-        if (collectionId !== null && !data.collections.some((c) => c.id === collectionId)) {
-          throw new ApiError(404, 'not_found', `no collection with id "${collectionId}"`)
-        }
-        bookmark.collectionId = collectionId
-      }
-      return bookmark
-    })
-  }
-
   /** Colours the app already uses for projects and collections. */
   const PALETTE = ['#e5484d', '#f76808', '#ffb224', '#30a46c', '#0091ff', '#8e4ec6']
 
@@ -707,8 +479,8 @@ export function createApi({
 
     // A note keeps its text history; any other file keeps its old copy in the bin.
     if (isNotePath(path)) {
-      const { note, created } = await store.writeNote(path, await readText(req), 'agent')
-      await log({ action: created ? 'created' : 'replaced', kind: 'note', path: note.path, message })
+      const { note, created, before } = await store.writeNote(path, await readText(req), 'agent')
+      await log({ action: created ? 'created' : 'replaced', kind: 'note', path: note.path, message, before })
       return { status: created ? 201 : 200, body: { ...describeNoteFile(note) } }
     }
     const { file, created } = await store.putFile(path, req, { replacedBy: log.actor })
@@ -821,12 +593,12 @@ export function createApi({
       }
       if (method === 'PUT') {
         const body = await readBody(req)
-        const { note, created } = await store.writeNote(
+        const { note, created, before } = await store.writeNote(
           path,
           requireString(body, 'content', { max: 4_000_000 }),
           'agent',
         )
-        await log({ action: created ? 'created' : 'replaced', kind: 'note', path: note.path })
+        await log({ action: created ? 'created' : 'replaced', kind: 'note', path: note.path, before })
         return { status: created ? 201 : 200, body: note }
       }
       if (method === 'PATCH') {
@@ -976,7 +748,12 @@ export function createApi({
       if (!rest.length) {
         if (method === 'GET') {
           const data = await store.loadTasks()
-          const tasks = filterTasks(data.tasks, url)
+          const tasks = filterTasks(data.tasks, {
+            filter: url.searchParams.get('filter') ?? 'all',
+            project: url.searchParams.get('project'),
+            includeCompleted: boolParam(url.searchParams.get('include_completed')),
+            includeDeleted: boolParam(url.searchParams.get('include_deleted')),
+          })
           return { status: 200, body: { count: tasks.length, tasks } }
         }
         if (method === 'POST') {
@@ -1006,19 +783,9 @@ export function createApi({
       }
       if (method === 'DELETE') {
         const permanent = boolParam(url.searchParams.get('permanent'))
-        const result = await store.updateTasks((data) => {
-          const index = data.tasks.findIndex((t) => t.id === id)
-          if (index === -1) throw new ApiError(404, 'not_found', `no task with id "${id}"`)
-          if (permanent) {
-            data.tasks.splice(index, 1)
-            return { id, permanent: true }
-          }
-          // Soft delete, matching the app's task bin (purged after 30 days).
-          data.tasks[index].deletedAt = Date.now()
-          return { id, permanent: false }
-        })
+        const result = await deleteTask(id, { permanent })
         await log({ action: 'deleted', kind: 'task', message: id })
-        return { status: 200, body: { deleted: result.id, permanent: result.permanent } }
+        return { status: 200, body: { deleted: id, permanent: result.permanent } }
       }
       throw methodNotAllowed(method)
     }

@@ -132,6 +132,32 @@ describe('files, activity and MCP', () => {
     })
   })
 
+  describe('the app\'s live event stream', () => {
+    it('nudges an open app the moment an agent writes, and needs the app header', async () => {
+      expect((await s.fetch('/api/library/events')).status).toBe(403)
+
+      const controller = new AbortController()
+      const res = await s.fetch('/api/library/events', { headers: APP, signal: controller.signal })
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-type')).toContain('text/event-stream')
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let received = ''
+      const until = async (needle) => {
+        while (!received.includes(needle)) {
+          const { value, done } = await reader.read()
+          if (done) throw new Error(`stream ended before ${needle}`)
+          received += decoder.decode(value, { stream: true })
+        }
+      }
+      await until(': connected')
+      await put('Live/ping.md', '# ping')
+      await until('event: activity')
+      expect(received).toMatch(/data: \{"at":\d+\}/)
+      controller.abort()
+    })
+  })
+
   describe('MCP at /api/v1/mcp', () => {
     let nextId = 1
     const rpc = async (method, params, { token = RW, headers = {} } = {}) => {
@@ -207,7 +233,7 @@ describe('files, activity and MCP', () => {
       const all = (await rpc('tools/list')).body.result.tools.map((t) => t.name)
       expect(all).toEqual(expect.arrayContaining(['search', 'read', 'write_note', 'save_file', 'create_project', 'log_progress']))
       const readOnly = (await rpc('tools/list', {}, { token: RO })).body.result.tools
-      expect(readOnly.map((t) => t.name).sort()).toEqual(['list', 'list_projects', 'read', 'recent_activity', 'search'])
+      expect(readOnly.map((t) => t.name).sort()).toEqual(['list', 'list_bookmarks', 'list_projects', 'list_tasks', 'read', 'recent_activity', 'search'])
       expect(readOnly.every((t) => t.annotations.readOnlyHint)).toBe(true)
       const refused = await call('write_note', { path: 'x.md', content: 'x' }, { token: RO })
       expect(refused).toMatchObject({ isError: true })
@@ -289,6 +315,80 @@ describe('files, activity and MCP', () => {
       expect((await call('read', { path: 'Archive/Long.md' })).isError).toBe(true)
     })
 
+    it('edits part of a note, refusing text that is missing or ambiguous', async () => {
+      await call('write_note', { path: 'Edits/Plan.md', content: '# Plan\n\nStatus: draft\n\nTODO one\nTODO two\n' })
+      const edited = await call('edit_note', { path: 'Edits/Plan', old_text: 'Status: draft', new_text: 'Status: final', message: 'ready' })
+      expect(edited).toMatchObject({ isError: false, text: 'Edited Edits/Plan.md.' })
+      expect(await fs.readFile(path.join(s.libraryDir, 'Edits/Plan.md'), 'utf8')).toContain('Status: final')
+
+      // Stale text — the user changed it meanwhile — writes nothing.
+      const stale = await call('edit_note', { path: 'Edits/Plan.md', old_text: 'Status: draft', new_text: 'x' })
+      expect(stale.isError).toBe(true)
+      expect(stale.text).toContain('read it again')
+
+      const ambiguous = await call('edit_note', { path: 'Edits/Plan.md', old_text: 'TODO', new_text: 'DONE' })
+      expect(ambiguous).toMatchObject({ isError: true })
+      expect(ambiguous.text).toContain('2 times')
+      expect((await call('edit_note', { path: 'Edits/Plan.md', old_text: 'TODO', new_text: 'DONE', replace_all: true })).text).toContain('2 places')
+      // "$&" in the replacement is text, not a regex back-reference.
+      await call('edit_note', { path: 'Edits/Plan.md', old_text: 'DONE one', new_text: 'cost $& more' })
+      const final = await fs.readFile(path.join(s.libraryDir, 'Edits/Plan.md'), 'utf8')
+      expect(final).toContain('cost $& more')
+      expect(final).not.toContain('TODO')
+
+      expect((await call('edit_note', { path: 'Edits/Nope.md', old_text: 'a', new_text: 'b' })).isError).toBe(true)
+      const history = await json(await s.fetch('/api/v1/history?path=Edits/Plan.md', { headers: auth() }))
+      expect(history.body.snapshots.length).toBeGreaterThan(0)
+    })
+
+    it('adds, lists, completes and bins tasks for the user', async () => {
+      await s.fetch('/api/v1/projects', {
+        method: 'POST',
+        headers: { ...auth(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Reviews' }),
+      })
+      const added = await call('add_task', {
+        title: 'Review the vendor comparison',
+        due: '2020-01-01',
+        priority: 1,
+        project: 'reviews',
+        source_note: 'Projects/Hermes trial/Vendor comparison',
+      })
+      expect(added.isError).toBe(false)
+      const id = added.text.match(/id ([0-9a-f-]+)/)[1]
+      expect((await call('add_task', { title: 'x', project: 'Nowhere' })).text).toContain('Projects: Reviews')
+      expect((await call('add_task', { title: 'x', due: '2026-02-31' })).isError).toBe(true)
+
+      const today = await call('list_tasks', { filter: 'today' }, { token: RO })
+      expect(today.text).toContain('Review the vendor comparison (P1, due 2020-01-01, project Reviews, about Projects/Hermes trial/Vendor comparison.md)')
+      expect((await call('list_tasks', { project: 'Reviews' })).text).toContain(id)
+
+      expect((await call('update_task', { id, completed: true })).text).toContain('[x]')
+      expect((await call('list_tasks', { filter: 'today' })).text).not.toContain(id)
+      expect((await call('list_tasks', { filter: 'completed' })).text).toContain(id)
+
+      const second = (await call('add_task', { title: 'Throw away' })).text.match(/id ([0-9a-f-]+)/)[1]
+      expect((await call('delete_task', { id: second })).text).toContain('task bin')
+      expect((await call('list_tasks', {})).text).not.toContain(second)
+      expect((await call('delete_task', { id: 'missing' })).isError).toBe(true)
+      expect((await call('add_task', { title: 'x' }, { token: RO })).isError).toBe(true)
+    })
+
+    it('saves and lists bookmarks', async () => {
+      await s.fetch('/api/v1/collections', {
+        method: 'POST',
+        headers: { ...auth(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Sources' }),
+      })
+      const saved = await call('save_bookmark', { url: 'example.com/paper', comment: 'Benchmarks.', collection: 'Sources' })
+      expect(saved.text).toBe('Saved bookmark "example.com".')
+      expect((await call('save_bookmark', { url: 'javascript:alert(1)' })).isError).toBe(true)
+      expect((await call('save_bookmark', { url: 'https://a.example', collection: 'Nope' })).isError).toBe(true)
+      const listed = await call('list_bookmarks', { collection: 'sources' }, { token: RO })
+      expect(listed.text).toContain('https://example.com/paper [Sources]')
+      expect(listed.text).toContain('Benchmarks.')
+    })
+
     it('turns bad arguments into tool errors the model can read, not protocol failures', async () => {
       expect(await call('read', {})).toMatchObject({ isError: true, text: '"path" is required' })
       expect((await call('read', { path: '../../etc/passwd' })).isError).toBe(true)
@@ -300,6 +400,18 @@ describe('files, activity and MCP', () => {
         encoding: 'base64',
       })
       expect(huge).toMatchObject({ isError: true })
+    })
+
+    it('gives every event an id, and points a rewrite at the version it replaced', async () => {
+      await call('write_note', { path: 'Review/Draft.md', content: 'first' })
+      await call('edit_note', { path: 'Review/Draft.md', old_text: 'first', new_text: 'second' })
+      const { body } = await json(await s.fetch('/api/v1/activity?path=Review/Draft.md', { headers: auth() }))
+      const [edited, created] = body.events
+      expect(edited.id).toMatch(/^[0-9a-f-]{36}$/)
+      expect(edited.id).not.toBe(created.id)
+      expect(created.before).toBeUndefined()
+      const snap = await json(await s.fetch(`/api/v1/history/${encodeURIComponent(edited.before)}`, { headers: auth() }))
+      expect(snap.body.content).toBe('first')
     })
 
     it('records its writes as MCP activity', async () => {

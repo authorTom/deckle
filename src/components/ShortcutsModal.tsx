@@ -12,6 +12,7 @@ import { useEffect, useRef } from 'react'
 import { useEnterExit } from '../hooks/useEnterExit'
 import { OVERLAY_EXIT_MS } from '../lib/motion'
 import { X } from 'lucide-react'
+import { ALT_KEY } from '../lib/platform'
 
 interface Props {
   open: boolean
@@ -64,6 +65,8 @@ function groups(mod: string): Group[] {
         { keys: ['A–Z'], what: 'Type a few letters to jump to a note' },
         { keys: ['Enter'], what: 'Open the row' },
         { keys: ['F2'], what: 'Rename' },
+        { keys: [ALT_KEY, 'M'], what: 'Move a note or file to another folder' },
+        { keys: [ALT_KEY, 'N'], what: 'New note in this folder (add Shift for a subfolder)' },
         { keys: ['Delete'], what: 'Move to the Recycle Bin — recoverable' },
         { keys: ['Drag'], what: 'Move a note into another folder' },
       ],
@@ -71,6 +74,7 @@ function groups(mod: string): Group[] {
     {
       title: 'Tabs',
       items: [
+        { keys: ['Delete'], what: 'Close the focused tab' },
         { keys: ['Middle-click'], what: 'Close a tab' },
         { keys: ['Double-click'], what: 'Close every other tab' },
         { keys: ['Drag'], what: 'Reorder' },

@@ -1,34 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  useEditor,
-  EditorContent,
-  BubbleMenu,
-  type Editor as TiptapEditor,
-} from '@tiptap/react'
-import StarterKit from '@tiptap/starter-kit'
-import Placeholder from '@tiptap/extension-placeholder'
-import Link from '@tiptap/extension-link'
-import TaskList from '@tiptap/extension-task-list'
-import TaskItem from '@tiptap/extension-task-item'
-import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
-import { createLowlight, common } from 'lowlight'
-import { Markdown } from 'tiptap-markdown'
+import { useEditor, EditorContent, type Editor as TiptapEditor } from '@tiptap/react'
+import { BubbleMenu } from '@tiptap/react/menus'
 import { BookmarkPlus, SquareCheckBig, X } from 'lucide-react'
 import WikilinkSuggest from './WikilinkSuggest'
 import Outline from './Outline'
 import Backlinks from './Backlinks'
 import NoteProperties from './NoteProperties'
 import { formatActions, listActions, type FormatAction } from './formatActions'
-import { Wikilink } from '../editor/wikilink'
-import { LibraryImage, libraryPathFor } from '../editor/image'
+import { libraryPathFor } from '../editor/image'
+import { editorExtensions } from '../editor/extensions'
 import { serialize } from '../editor/markdown'
 import { joinFrontmatter, splitFrontmatter } from '../lib/frontmatter'
-import {
-  MarkdownTable,
-  MarkdownTableCell,
-  MarkdownTableHeader,
-  MarkdownTableRow,
-} from '../editor/markdownTable'
 import { resolveWikilink, type Backlink } from '../lib/wikilinks'
 import {
   prefersReducedMotion,
@@ -37,7 +19,13 @@ import {
 } from '../lib/motion'
 import type { LibraryFile } from '../fs/library'
 
-const lowlight = createLowlight(common)
+/**
+ * The bubble menu's settings, kept as constants: TipTap 3's BubbleMenu sends a
+ * transaction whenever these props change identity, and this pane re-renders
+ * on every transaction — so values made fresh each render loop forever.
+ */
+const BUBBLE_OPTIONS = { placement: 'top', offset: 8, flip: true, shift: { padding: 8 } } as const
+const showBubbleForSelection = ({ state }: { state: { selection: { empty: boolean } } }) => !state.selection.empty
 
 interface EditorPaneProps {
   noteId: string
@@ -150,31 +138,32 @@ export default function EditorPane({
   }, [loadedFrontmatter])
 
   const extensions = useMemo(
-    () => [
-      StarterKit.configure({ heading: { levels: [1, 2, 3] }, codeBlock: false }),
-      Placeholder.configure({ placeholder: 'Start writing…' }),
-      Markdown.configure({ linkify: true, breaks: true, transformPastedText: true }),
-      Link.configure({ openOnClick: true, autolink: true, HTMLAttributes: { rel: 'noopener noreferrer' } }),
-      TaskList,
-      TaskItem.configure({ nested: true }),
-      MarkdownTable.configure({ resizable: true }),
-      MarkdownTableRow,
-      MarkdownTableHeader,
-      MarkdownTableCell,
-      CodeBlockLowlight.configure({ lowlight }),
-      LibraryImage.configure({ resolve: resolveImage }),
-      Wikilink.configure({
-        resolve: (target) =>
-          resolveWikilink(target, notesRef.current, noteIdRef.current),
-        onOpen: (id) => onOpenNoteRef.current(id),
+    () =>
+      editorExtensions({
+        resolveImage,
+        resolveWikilink: (target) => resolveWikilink(target, notesRef.current, noteIdRef.current),
+        onOpenWikilink: (id) => onOpenNoteRef.current(id),
       }),
-    ],
+    // Built once; everything it reads goes through refs or stable callbacks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   )
 
   const editor = useEditor({
     extensions,
     content: '',
+    // TipTap 3 stopped re-rendering on every transaction by default. The
+    // bubble menu's active states are read during render, so keep the v2
+    // behaviour for this pane.
+    shouldRerenderOnTransaction: true,
+    // The document is a multi-line text field; say so, and say which note.
+    editorProps: {
+      attributes: {
+        role: 'textbox',
+        'aria-multiline': 'true',
+        'aria-label': paneLabel ? `${paneLabel} — note text` : 'Note text',
+      },
+    },
     onUpdate: ({ editor }) => {
       onContentChange(noteId, joinFrontmatter(frontmatterRef.current, serialize(editor)))
     },
@@ -201,7 +190,7 @@ export default function EditorPane({
     if (!editor) return
     const text = body.replace(/^\s*\n/, '')
     if (text === serialize(editor)) return
-    editor.commands.setContent(text, false)
+    editor.commands.setContent(text, { emitUpdate: false })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, body])
 
@@ -217,6 +206,20 @@ export default function EditorPane({
   useEffect(() => {
     if (!editor || !ownedFocusAtMount.current) return
     if (shouldClaimFocus && !shouldClaimFocus()) return
+    // Never from something the person is already typing in — the command
+    // palette opened while the note was still loading, say. The keystrokes
+    // meant for it would land in the note instead.
+    const current = document.activeElement as HTMLElement | null
+    if (
+      current &&
+      current !== document.body &&
+      !editor.view.dom.contains(current) &&
+      (current.closest('[role="dialog"]') ||
+        ['INPUT', 'TEXTAREA', 'SELECT'].includes(current.tagName) ||
+        current.isContentEditable)
+    ) {
+      return
+    }
     // 'start', not 'end': the note has just flown its heading into place and
     // the reader is looking at the top of it. Focusing the end would scroll a
     // long note to its last line and throw that away.
@@ -326,8 +329,8 @@ export default function EditorPane({
           {editor && (
             <BubbleMenu
               editor={editor}
-              tippyOptions={{ duration: 100, interactive: true, maxWidth: 'none' }}
-              shouldShow={({ state }) => !state.selection.empty}
+              options={BUBBLE_OPTIONS}
+              shouldShow={showBubbleForSelection}
               className="bubble-menu"
             >
               <>

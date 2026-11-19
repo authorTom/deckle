@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { isRemoteHandle } from '../fs/remote'
+import { followRemoteChanges, isRemoteHandle } from '../fs/remote'
 import {
   activityStamp,
   loadActivity,
@@ -10,16 +10,22 @@ import {
 
 /** How often to look for an agent's changes while the tab is in view. */
 const POLL_MS = 15_000
+/** The same, while the live stream is open and doing that job already. */
+const POLL_STREAMING_MS = 120_000
+/** Waits between attempts to reopen a dropped stream: 2 s, doubling to a minute. */
+const RETRY_MIN_MS = 2_000
+const RETRY_MAX_MS = 60_000
 
 /**
  * The activity log, kept current.
  *
  * An agent writes to the library from somewhere else entirely, so nothing in
- * the page learns about it on its own. On a server library this asks for the
- * log's size and modification time every few seconds while the tab is
- * visible, and on focus — one tiny request — and only when those move does it
- * read the log and tell the caller (`onChange`), which reloads the tree and any
- * open note. A local library has no log; it just refreshes on focus, since an
+ * the page learns about it on its own. On a server library the server says so
+ * the moment it happens, over a live stream (/api/library/events); behind a
+ * proxy that won't carry one, this falls back to asking for the log's size and
+ * modification time every few seconds while the tab is visible, and on focus —
+ * one tiny request. Only when those move does it read the log and tell the
+ * caller (`onChange`), which reloads the tree and any open note. A local library has no log; it just refreshes on focus, since an
  * agent may have written into the folder directly.
  */
 export function useActivity(
@@ -72,14 +78,48 @@ export function useActivity(
     onChangeRef.current()
   }, [dir, reloadEvents])
 
+  const [streaming, setStreaming] = useState(false)
+
+  // The live stream, reopened with a growing pause whenever it drops.
+  useEffect(() => {
+    if (!dir || !isRemoteHandle(dir)) return
+    const controller = new AbortController()
+    let retry = RETRY_MIN_MS
+    let wait: ReturnType<typeof setTimeout> | undefined
+    const open = () => {
+      const opened = Date.now()
+      setStreaming(true)
+      followRemoteChanges(() => void check(), controller.signal)
+        .catch(() => {})
+        .finally(() => {
+          setStreaming(false)
+          if (controller.signal.aborted) return
+          // A stream that lasted a while was healthy; start the back-off over.
+          retry = Date.now() - opened > RETRY_MAX_MS ? RETRY_MIN_MS : Math.min(retry * 2, RETRY_MAX_MS)
+          // Catch anything missed while it was down.
+          void check()
+          wait = setTimeout(open, retry)
+        })
+    }
+    open()
+    return () => {
+      controller.abort()
+      if (wait) clearTimeout(wait)
+      setStreaming(false)
+    }
+  }, [dir, check])
+
   useEffect(() => {
     if (!dir) return
     void check()
     const remote = isRemoteHandle(dir)
     const timer = remote
-      ? setInterval(() => {
-          if (document.visibilityState === 'visible') void check()
-        }, POLL_MS)
+      ? setInterval(
+          () => {
+            if (document.visibilityState === 'visible') void check()
+          },
+          streaming ? POLL_STREAMING_MS : POLL_MS,
+        )
       : undefined
     const onVisible = () => {
       if (document.visibilityState === 'visible') void check()
@@ -91,7 +131,7 @@ export function useActivity(
       window.removeEventListener('focus', onVisible)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [dir, check])
+  }, [dir, check, streaming])
 
   const unseen = useMemo(() => events.filter((e) => e.at > seenAt).length, [events, seenAt])
 

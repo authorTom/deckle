@@ -361,6 +361,25 @@ export default function Sidebar({
       if (next) focusRow(next.id)
     }
 
+    // Alt/Option+M moves a note or file to another folder: the keyboard's way
+    // to do what dragging does. Matched on the physical key, because
+    // Option+M types "µ" on a Mac; a bare letter belongs to type-ahead, and the
+    // browser keeps F6 for itself.
+    if (e.altKey && !e.metaKey && !e.ctrlKey && e.code === 'KeyM') {
+      e.preventDefault()
+      if (row.kind !== 'folder') onRequestMove(row.id)
+      return
+    }
+    // Alt+N: a new note in this folder (or the note's own folder); with Shift,
+    // a new subfolder. The keyboard's way to the row's hover buttons.
+    if (e.altKey && !e.metaKey && !e.ctrlKey && e.code === 'KeyN') {
+      e.preventDefault()
+      const folder = row.kind === 'folder' ? row.id : (parentOf(row.id) ?? '')
+      if (e.shiftKey) startCreateFolder(folder)
+      else onCreateInFolder(folder)
+      return
+    }
+
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault()
@@ -464,6 +483,7 @@ export default function Sidebar({
           aria-expanded={isFolder ? isOpen : undefined}
           aria-selected={row.id === activeId}
           aria-level={row.depth + 1}
+          aria-keyshortcuts={isFolder ? 'F2 Delete Alt+N Alt+Shift+N' : 'F2 Delete Alt+M Alt+N'}
           draggable={!isFolder}
           style={indent}
           className={[
@@ -528,7 +548,10 @@ export default function Sidebar({
           </span>
           <span className="tree-label">{row.label}</span>
 
-          <span className="tree-actions">
+          {/* Pointer shortcuts. Each has a key on the row (F2, Delete, Alt+M,
+              Alt+N, Alt+Shift+N), so they are kept out of the accessibility
+              tree rather than nested, unreachable, inside a treeitem. */}
+          <span className="tree-actions" aria-hidden="true">
             {isFolder && (
               <>
                 <button
@@ -628,43 +651,48 @@ export default function Sidebar({
     }
     return (
       <div className="note-tree">
-        {/* A row rather than a button, because it carries a button of its own:
-            having found a note by searching is exactly when moving it is
-            easiest to ask for, and a note nested inside a button is invalid. */}
+        {/* A row holding two controls side by side: the result itself, which
+            opens it, and a Move button — having found a note by searching is
+            exactly when moving it is easiest to ask for. Siblings rather than
+            one inside the other: a control can't contain another. */}
         {results.map((r) => {
           const ResultIcon = iconFor({ kind: r.kind, name: r.name })
           return (
           <div
             key={r.id}
-            role="button"
-            tabIndex={0}
             className={`tree-row file-row search-result${
               r.id === activeId ? ' active' : ''
             }`}
             onClick={(e) =>
               onSelect(r.id, rectOf(e.currentTarget.querySelector('.tree-label')))
             }
-            onKeyDown={(e) => {
-              if (e.key !== 'Enter' && e.key !== ' ') return
-              e.preventDefault()
-              onSelect(
-                r.id,
-                rectOf((e.currentTarget as HTMLElement).querySelector('.tree-label')),
-              )
-            }}
           >
-            <span className="tree-icon">
-              <ResultIcon size={15} />
-            </span>
-            <span className="search-result-body">
-              <span className="tree-label">{r.title}</span>
-              {r.folderPath && (
-                <span className="search-result-path">{r.folderPath}</span>
-              )}
-              {r.snippet && (
-                <span className="search-result-snippet">{r.snippet}</span>
-              )}
-            </span>
+            <button
+              type="button"
+              className="search-result-open"
+              aria-current={r.id === activeId ? 'page' : undefined}
+              aria-keyshortcuts="Alt+M"
+              onKeyDown={(e) => {
+                if (e.altKey && !e.metaKey && !e.ctrlKey && e.code === 'KeyM') {
+                  e.preventDefault()
+                  onRequestMove(r.id)
+                }
+              }}
+            >
+              <span className="tree-icon">
+                <ResultIcon size={15} />
+              </span>
+              <span className="search-result-body">
+                <span className="tree-label">{r.title}</span>
+                {r.folderPath && (
+                  <span className="search-result-path">{r.folderPath}</span>
+                )}
+                {r.snippet && (
+                  <span className="search-result-snippet">{r.snippet}</span>
+                )}
+              </span>
+            </button>
+            {/* A sibling now, so it can be announced; Alt+M is its key. */}
             <span className="tree-actions">
               <button
                 type="button"

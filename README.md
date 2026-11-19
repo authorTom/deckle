@@ -62,8 +62,12 @@ makes is as recoverable as your own.
 
 - **An MCP server** at `/api/v1/mcp`, so an agent such as Hermes can use
   Deckle directly: `search`, `read`, `list`, `list_projects`,
-  `recent_activity`, `write_note`, `save_file`, `create_project`,
-  `update_project`, `log_progress`, `move` and `delete`. It uses the same tokens
+  `recent_activity`, `list_tasks`, `list_bookmarks`, `write_note`,
+  `edit_note`, `save_file`, `create_project`, `update_project`,
+  `log_progress`, `add_task`, `update_task`, `delete_task`, `save_bookmark`,
+  `move` and `delete`. An agent can hand you a task — "review this report" —
+  that lands in your planner, and change one passage of a note without
+  rewriting the whole thing. It uses the same tokens
   as the REST API, and a read-only token is offered the read tools only. See
   [Connecting Hermes](integrations/hermes/README.md).
 - **Files, not just notes** — PDFs, spreadsheets, Word and PowerPoint
@@ -81,8 +85,18 @@ makes is as recoverable as your own.
   Activity feed groups it by day, the top bar counts what's new since you last
   looked, and a file's viewer says who saved it and why. The log itself is
   `.deckle/activity.jsonl` in your library.
+- **Review** — what an agent wrote waits under **To review** in the Activity
+  feed until you mark it reviewed, one item at a time or all at once.
+  **Compare** shows a note as it was before the agent's change against the
+  note now, line by line. What you have reviewed is kept in the library
+  (`.deckle/review.json`), so it holds on every device.
 - **Live** — on a server library, an agent's changes appear in an open app
-  within about fifteen seconds, without a refresh.
+  the moment they are made, without a refresh. (Behind a proxy that won't
+  carry a streaming response, it falls back to checking every fifteen
+  seconds.)
+- **Installable** — add Deckle to your home screen or dock and it opens like
+  an app, and opens without a network. Only the app itself is kept for offline
+  use; your notes are never cached by it.
 - **Search inside documents** — the API and MCP search rank notes and files
   together, reading the text inside Word, Excel, PowerPoint, OpenDocument, CSV,
   JSON, text and code files. PDFs and images are found by name, and by the notes
@@ -314,6 +328,15 @@ server, every storage path, file previews and autosave:
 ```bash
 npm test                              # once, as CI runs it
 npm run test:watch                    # re-run on change
+```
+
+The browser tests build the app, start the real server with a throwaway
+server library, and drive it in your installed Chrome — writing notes, an
+agent's change arriving live, the review queue, the bubble menu, keyboard
+moves, and an axe accessibility scan of the main screens in light and dark:
+
+```bash
+npm run test:e2e
 ```
 
 ## Configuration
@@ -709,6 +732,11 @@ your editor or existing backup tool straight at it.
 | `Ctrl`/`Cmd` + `K` | Open the command palette |
 | `Ctrl`/`Cmd` + `Shift` + `A` | Capture selection as a task / toggle the task panel |
 | `Ctrl`/`Cmd` + `Shift` + `F` | Toggle focus mode |
+| `Ctrl`/`Cmd` + `Shift` + `W` | Close the current tab |
+| `Alt`/`⌥` + `M` | In the note list: move the note or file to another folder |
+| `Alt`/`⌥` + `N` | In the note list: new note in that folder (`Shift` too for a subfolder) |
+| `Delete` | In the note list: move to the Recycle Bin. On a tab: close it |
+| `?` | Every shortcut |
 | `Esc` | Close the topmost dialog / exit focus mode |
 
 ## Licence

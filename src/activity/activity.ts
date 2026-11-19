@@ -14,6 +14,8 @@ import { DATA_DIR } from '../fs/appData'
 import { isRemoteHandle, statRemote } from '../fs/remote'
 
 export interface ActivityEvent {
+  /** Set by servers from 3.1 on; older lines have none. */
+  id?: string
   at: number
   /** The API token's name — "hermes", say. */
   actor: string
@@ -26,6 +28,8 @@ export interface ActivityEvent {
   size?: number
   count?: number
   message?: string
+  /** The version-history snapshot holding what a note said before this write. */
+  before?: string
 }
 
 export const ACTIVITY_FILE = 'activity.jsonl'

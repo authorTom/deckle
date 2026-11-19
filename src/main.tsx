@@ -21,6 +21,16 @@ try {
   // Storage blocked (a private window, say): there is nothing to clear.
 }
 
+// Installable, and opens with no network: see public/sw.js. Not in development,
+// where a cached page would hide the change being worked on.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((err: unknown) => {
+      console.warn('[deckle] offline support unavailable:', err)
+    })
+  })
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
