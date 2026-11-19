@@ -1,0 +1,228 @@
+/* =========================================================================
+   Reduced motion
+   Everything above is decoration; none of it is load-bearing, so it can all
+   be switched off wholesale.
+   ========================================================================= */
+/* =========================================================================
+   Responsive layout
+
+   Deliberately the last section in this file, and it has to stay last.
+
+   A media query adds nothing to specificity: `@media … { .sidebar-dock {
+   position: fixed } }` and a plain `.sidebar-dock { position: relative }`
+   are both (0,1,0), so the winner is whichever comes later. These rules used
+   to sit up with the sidebar, ~2,300 lines above the docked-panel
+   definitions — so the drawer never actually left the flow on a phone. It
+   took the `width` (which happened to be flagged !important) and dropped the
+   `position`, leaving a 280px dock in the layout with the editor squeezed to
+   nothing beside it. Everything here overrides a base component rule, so all
+   of it belongs below all of them.
+   ========================================================================= */
+
+/* ---------- Mobile & tablet drawers ----------
+   Above the breakpoint the three docks are columns: they own a width and push
+   the editor aside. Below it there isn't room to share, so every one of them
+   leaves the flow and slides over the editor as a drawer, with a scrim behind.
+
+   The whole dock moves, not the panel inside it. An earlier version fixed the
+   *panel* and left the dock in the flow at `width: 100%`, which squeezed the
+   editor to zero and reflowed the entire workspace every time the task list
+   was opened — the panel floated correctly over a workspace that had been
+   destroyed behind it. */
+.scrim {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .sidebar-dock,
+  .task-dock {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    z-index: 30;
+    /* Beats the inline width the resize handles write, which is a desktop
+       measurement and has no meaning once these are drawers. */
+    width: min(86vw, 360px) !important;
+    opacity: 1;
+    transition: transform var(--dur-slow) var(--ease-out);
+  }
+
+  /* Only once it's on screen — a shadow on a drawer parked off the edge
+     bleeds a grey band down the side of the editor. */
+  .sidebar-dock:has(.sidebar.open),
+  .task-dock.open {
+    box-shadow: var(--shadow-lg);
+  }
+
+  .sidebar-dock,
+  .task-dock {
+    left: 0;
+    transform: translateX(-100%);
+  }
+
+  .sidebar-dock:has(.sidebar.open),
+  .task-dock.open {
+    transform: none;
+  }
+
+  /* Focus mode collapses the docks to zero width on a desktop; here they are
+     out of the flow already, so they just leave. */
+  .app.focus-mode .sidebar-dock,
+  .app.focus-mode .task-dock {
+    transform: translateX(-100%);
+  }
+
+  /* A drawer is the full height of the screen, so its contents clear the
+     notch and the home indicator themselves. */
+  .sidebar,
+  .task-panel {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .resize-handle {
+    display: none;
+  }
+
+  .hamburger {
+    display: inline-flex;
+  }
+
+  .scrim.show {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 20;
+  }
+
+  .editor-wrap {
+    padding: 20px 18px 120px;
+  }
+
+  .topbar,
+  .toolbar {
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+
+  .topbar {
+    padding-top: max(10px, env(safe-area-inset-top));
+  }
+}
+
+/* ---------- Compact workspace ----------
+   Measured against the workspace container rather than the window, for the
+   same reason the outline is: three open panels can leave the editor phone-
+   width on a 27" display, and that is exactly when these apply. */
+
+/* A split is two columns of prose side by side. Below ~700px there isn't one
+   column's worth of room, never mind two, so they stack instead. */
+@container workspace (max-width: 700px) {
+  .panes.split {
+    flex-direction: column;
+  }
+
+  .panes.split .pane {
+    flex: 1 1 50%;
+    min-height: 0;
+  }
+
+  /* The rule between them turns with them. */
+  .panes.split > .pane-divider {
+    width: auto;
+    height: 1px;
+  }
+
+  /* The focused pane's marker moves to the edge that now faces the reader. */
+  .panes.split .pane.focused .pane-header {
+    box-shadow: inset 0 2px 0 var(--accent);
+  }
+}
+
+/* Twenty-odd formatting buttons wrap into three stacked rows on a phone, which
+   eats the document to say the same thing. One scrolling row instead. */
+@container workspace (max-width: 620px) {
+  .toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .toolbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ---------- Touch ----------
+   Keyed to the pointer, not the width: 36px is comfortable for a mouse at any
+   screen size and small for a fingertip at any screen size. */
+@media (pointer: coarse) {
+  .icon-btn {
+    width: 42px;
+    height: 42px;
+  }
+
+  .toolbar-btn {
+    min-width: 40px;
+    height: 40px;
+  }
+
+  .tree-row {
+    padding: 9px 8px;
+  }
+
+  .task-pill {
+    padding: 7px 12px;
+  }
+
+  .task-row {
+    padding: 10px 6px;
+  }
+
+  /* The tap target grows without the drawn circle changing size — the ring is
+     18px because that is what reads right beside the title. */
+  .task-check {
+    width: 24px;
+    height: 24px;
+    border-width: 2px;
+    margin-top: 0;
+  }
+
+  /* iOS zooms the page whenever a focused field is under 16px. Deckle's chrome
+     is deliberately denser than that, so lift the fields only, and only where
+     a finger is doing the tapping. */
+  input,
+  textarea,
+  select {
+    font-size: max(1rem, var(--fs-md));
+  }
+}
+
+/* ---------- Overlays on a small screen ----------
+   12vh of top padding is breathing room on a laptop and a third of a phone in
+   landscape. Sit them nearer the top and let them use the height. */
+@media (max-width: 640px) {
+  .palette-overlay,
+  .modal-overlay {
+    padding: 6vh 10px max(10px, env(safe-area-inset-bottom));
+  }
+
+  .palette,
+  .modal {
+    width: 100%;
+    max-height: 82vh;
+  }
+}
+
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

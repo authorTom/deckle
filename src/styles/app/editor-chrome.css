@@ -1,0 +1,256 @@
+/* ---------- Toolbar ---------- */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 16px;
+  border-bottom: var(--rule) solid var(--border);
+  background: var(--bg);
+}
+
+.toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 6px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.toolbar-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.toolbar-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* The toolbar is one tab stop with the arrows moving inside it, so the ring is
+   how a keyboard user knows which control they are on — inset, like the tabs,
+   so it doesn't overlap the neighbour 2px away. */
+.toolbar-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 22px;
+  background: var(--border);
+  margin: 0 6px;
+}
+
+/* ---------- Bubble menu ---------- */
+.bubble-menu {
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: var(--rule) solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+}
+
+.bubble-menu .toolbar-btn {
+  height: 30px;
+  min-width: 30px;
+}
+
+/* ---------- Focus mode ----------
+   Chrome collapses rather than disappearing: the docks run their width
+   transition to zero, and the bars fold up out of the way. */
+.app.focus-mode .sidebar-dock,
+.app.focus-mode .task-dock {
+  width: 0 !important;
+  opacity: 0;
+}
+
+.app.focus-mode .scrim {
+  display: none;
+}
+
+.app.focus-mode .topbar,
+.app.focus-mode .toolbar,
+.app.focus-mode .tab-strip {
+  max-height: 0;
+  min-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+  overflow: hidden;
+  border-bottom-color: transparent;
+  pointer-events: none;
+}
+
+.topbar,
+.toolbar,
+.tab-strip {
+  max-height: 200px;
+  /* Correct in general, accepted here: these bars have to *collapse* so the
+     editor reclaims the space, which transform can't do. Focus mode is toggled
+     occasionally, not dragged, so the layout cost is paid once per toggle. */
+  /* impeccable-disable-next-line layout-transition */
+  transition: max-height var(--dur-slow) var(--ease-in-out),
+    min-height var(--dur-slow) var(--ease-in-out),
+    padding var(--dur-slow) var(--ease-in-out),
+    opacity var(--dur-base) var(--ease-out);
+}
+
+.focus-exit {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  z-index: 40;
+  opacity: 0.35;
+  transition: opacity 0.15s ease;
+}
+
+.focus-exit:hover {
+  opacity: 1;
+}
+
+.app.focus-mode .editor-wrap {
+  padding-top: 56px;
+}
+
+/* ---------- Command palette ---------- */
+.palette-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 12vh 16px 16px;
+  backdrop-filter: blur(2px);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.palette-overlay.entered {
+  opacity: 1;
+  transition-duration: var(--dur-base);
+}
+
+/* Scaled down and lifted, so it reads as dropping into place rather than
+   zooming at the reader. */
+.palette {
+  width: min(92vw, 600px);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  border: var(--rule) solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  opacity: 0;
+  transform: scale(0.97) translateY(-8px);
+  transition: opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.palette.entered {
+  opacity: 1;
+  transform: none;
+  transition-duration: var(--dur-base);
+}
+
+.palette-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: var(--rule) solid var(--border);
+  color: var(--text-faint);
+}
+
+.palette-input input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  color: var(--text);
+  font-size: var(--fs-lg);
+}
+
+.palette-input input::placeholder {
+  color: var(--text-faint);
+}
+
+.palette-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.palette-section {
+  font-size: var(--fs-label);
+  text-transform: uppercase;
+  font-weight: var(--fw-label);
+  letter-spacing: var(--track-label);
+  color: var(--text-faint);
+  padding: 10px 10px 4px;
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text);
+  /* The highlight moves; the rows themselves never stagger, which would turn
+     into jitter as the list refilters on each keystroke. */
+  transition: background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.palette-item.selected {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.palette-item-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.palette-item.selected .palette-item-icon {
+  color: var(--accent);
+}
+
+.palette-item-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+}
+
+.palette-hint {
+  flex-shrink: 0;
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.palette-empty {
+  padding: 22px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: var(--fs-ui);
+}

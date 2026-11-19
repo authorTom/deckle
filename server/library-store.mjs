@@ -295,14 +295,17 @@ export function createLibraryStore(library) {
     if (existing === 'directory') {
       throw new ApiError(409, 'conflict', `"${path}" is a folder`)
     }
+    let before
     if (existing === 'file') {
       const previous = await library.readText(path)
       if (previous.trim() && previous !== content) {
-        await snapshot(path, previous, reason)
+        before = await snapshot(path, previous, reason)
       }
     }
     await library.writeText(path, content)
-    return { note: await readNote(path), created: existing !== 'file' }
+    // `before` names the snapshot holding what was there, so the activity log
+    // can point the person at exactly what this write replaced.
+    return { note: await readNote(path), created: existing !== 'file', before }
   }
 
   /** Move or rename a note, carrying its history entries with it. */
@@ -459,8 +462,9 @@ export function createLibraryStore(library) {
   // ---- Version history -----------------------------------------------------
 
   /** Save `content` as the previous version of `notePath`, pruning old ones. */
+  /** The snapshot's name, or undefined if it could not be taken. */
   async function snapshot(notePath, content, reason) {
-    await withLock(HISTORY_INDEX, async () => {
+    return await withLock(HISTORY_INDEX, async () => {
       const savedAt = Date.now()
       const snapName = `${savedAt}_${notePath.replace(/\//g, '__')}`
       await library.writeText(joinPath(HISTORY_DIR, snapName), content)
@@ -484,8 +488,10 @@ export function createLibraryStore(library) {
         HISTORY_INDEX,
         list.filter((i) => i.noteId !== notePath || keep.has(i.snapName)),
       )
+      return snapName
     }).catch(() => {
       // History must never break the write it protects.
+      return undefined
     })
   }
 

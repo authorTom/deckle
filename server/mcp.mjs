@@ -29,6 +29,7 @@ import {
   normalizeNotePath,
 } from './library-store.mjs'
 import { STATUSES } from './projects.mjs'
+import { createPlanner } from './planner.mjs'
 
 /** Newest first. The one a client asks for is used when we know it. */
 const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']
@@ -52,6 +53,9 @@ const INSTRUCTIONS = `Deckle is the user's knowledge base: plain Markdown notes 
 - Save deliverables (reports, spreadsheets, images, code) with save_file or write_note, and write findings, decisions and sources as notes rather than leaving them only in the conversation.
 - After each meaningful step, log_progress with what you did, what you decided and why, and what is next.
 - Link related notes and files with [[wikilinks]] — [[Q3 report.pdf]], [[Research notes]] — and describe every important file in a note, because PDFs and images are only searchable by name and by the notes that mention them.
+- To change part of a note, use edit_note rather than rewriting it with write_note.
+- When you need the user to do or decide something — review a report, approve a plan — add_task with source_note pointing at the note, rather than only saying so in the conversation.
+- Save useful sources with save_bookmark.
 - Never store secrets: API keys, passwords, tokens, .env files, private keys.
 
 Deleting moves things to a recycle bin, and replacing a file keeps the old copy there, so the user can undo anything you do.`
@@ -115,12 +119,68 @@ function windowed(content, offset, maxChars) {
   return `${slice}${more}`
 }
 
+const TASK_FILTERS = ['all', 'inbox', 'today', 'upcoming', 'overdue', 'completed']
+
+function countOccurrences(haystack, needle) {
+  let count = 0
+  for (let i = haystack.indexOf(needle); i !== -1; i = haystack.indexOf(needle, i + needle.length)) count++
+  return count
+}
+
+function findByName(list, name) {
+  const wanted = name.trim().toLowerCase()
+  return list.find((item) => item.name.trim().toLowerCase() === wanted)
+}
+
+function findPlannerProject(data, name) {
+  return findByName(data.projects, name)
+}
+
+function plannerProjectNames(data) {
+  return data.projects.map((p) => p.name).join(', ') || 'none yet'
+}
+
+function byDueThenPriority(a, b) {
+  if (a.due !== b.due) return !a.due ? 1 : !b.due ? -1 : a.due < b.due ? -1 : 1
+  return a.priority - b.priority
+}
+
+function describeTask(task, data) {
+  const project = task.projectId ? data.projects.find((p) => p.id === task.projectId)?.name : null
+  const bits = [
+    `P${task.priority}`,
+    task.due ? `due ${task.due}` : null,
+    task.recurrence ? `repeats ${task.recurrence.interval > 1 ? `every ${task.recurrence.interval} ` : ''}${task.recurrence.freq}` : null,
+    project ? `project ${project}` : 'Inbox',
+    task.source?.noteId ? `about ${task.source.noteId}` : null,
+  ].filter(Boolean)
+  const box = task.deletedAt ? '[binned]' : task.completedAt ? '[x]' : '[ ]'
+  return `- ${box} ${task.title} (${bits.join(', ')}) · id ${task.id}`
+}
+
 // ---- The server ------------------------------------------------------------
 
 export function createMcp({ library, store, search, activity, projects, libraryName, maxFileBytes }) {
   const inlineLimit = Math.min(MAX_INLINE_FILE_BYTES, maxFileBytes)
 
   const record = (token, event) => activity.record({ actor: token.name, via: 'mcp', ...event })
+  const planner = createPlanner(store)
+
+  /** A task-planner project named in args.project, as an id; null for the Inbox. */
+  async function resolvePlannerProject(args) {
+    if (args?.project === undefined || args?.project === null || args?.project === '') return null
+    if (typeof args.project !== 'string') throw new ApiError(400, 'invalid_params', '"project" must be a name')
+    const data = await store.loadTasks()
+    const project = findPlannerProject(data, args.project)
+    if (!project) {
+      throw new ApiError(
+        404,
+        'not_found',
+        `No task-planner project called "${args.project}". Projects: ${plannerProjectNames(data)}. Omit project for the Inbox.`,
+      )
+    }
+    return project.id
+  }
 
   // Each tool: name, whether a read-only token may use it, the schema the
   // model sees, and what it does. Descriptions are written for the model.
@@ -368,14 +428,64 @@ export function createMcp({ library, store, search, activity, projects, libraryN
           const separator = current && !current.endsWith('\n') ? '\n\n' : current ? '\n' : ''
           next = `${current}${separator}${content}`
         }
-        const { note, created } = await store.writeNote(path, next, 'agent')
+        const { note, created, before } = await store.writeNote(path, next, 'agent')
         await record(token, {
           action: created ? 'created' : mode === 'append' ? 'appended to' : 'replaced',
           kind: 'note',
           path: note.path,
           message,
+          before,
         })
         return text(`${created ? 'Created' : mode === 'append' ? 'Appended to' : 'Replaced'} ${note.path}.`)
+      },
+    },
+    {
+      name: 'edit_note',
+      readOnly: false,
+      title: 'Edit part of a note',
+      description:
+        "Change part of a note without rewriting it: replaces old_text with new_text. old_text must match the note exactly — read the note first — and must appear once, unless replace_all is true. If the note changed since you read it and old_text is gone, nothing is written and you are told so; read it again. The previous version is kept in the note's history. Prefer this to write_note's replace mode for small changes: it is cheaper, and it never undoes edits the user made meanwhile.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'e.g. "Projects/Acme/Overview.md".' },
+          old_text: { type: 'string', description: 'The exact text to replace.' },
+          new_text: { type: 'string', description: 'What to put in its place; empty to delete it.' },
+          replace_all: { type: 'boolean', default: false },
+          message: { type: 'string', description: 'One line on why, shown in the activity log.' },
+        },
+        required: ['path', 'old_text', 'new_text'],
+      },
+      async run(args, token) {
+        const path = normalizeNotePath(str(args, 'path', { max: 1024 }))
+        const oldText = str(args, 'old_text', { max: 1_000_000 })
+        const newText = args?.new_text ?? ''
+        if (typeof newText !== 'string') return toolError(`"new_text" must be a string.`)
+        if (newText.length > 4_000_000) return toolError(`"new_text" is too long.`)
+        const message = str(args, 'message', { optional: true, max: 1000 })
+        const kind = await library.exists(path)
+        if (kind === 'directory') return toolError(`"${path}" is a folder.`)
+        if (!kind) return toolError(`No note at "${path}". Use write_note to create it.`)
+
+        const current = await library.readText(path)
+        const count = countOccurrences(current, oldText)
+        if (count === 0) {
+          return toolError(
+            `old_text was not found in ${path}. The note may have changed since you read it — read it again and copy the text exactly.`,
+          )
+        }
+        if (count > 1 && args?.replace_all !== true) {
+          return toolError(
+            `old_text appears ${count} times in ${path}. Include more of the surrounding text so it matches once, or set replace_all.`,
+          )
+        }
+        const next = args?.replace_all === true
+          ? current.split(oldText).join(newText)
+          : current.replace(oldText, () => newText)
+        if (next === current) return text(`No change: ${path} already reads that way.`)
+        const { note, before } = await store.writeNote(path, next, 'agent')
+        await record(token, { action: 'edited', kind: 'note', path: note.path, message, before })
+        return text(`Edited ${note.path}${count > 1 ? ` (${count} places)` : ''}.`)
       },
     },
     {
@@ -411,8 +521,8 @@ export function createMcp({ library, store, search, activity, projects, libraryN
         }
 
         if (isNotePath(path)) {
-          const { note, created } = await store.writeNote(path, bytes.toString('utf8'), 'agent')
-          await record(token, { action: created ? 'created' : 'replaced', kind: 'note', path: note.path, message })
+          const { note, created, before } = await store.writeNote(path, bytes.toString('utf8'), 'agent')
+          await record(token, { action: created ? 'created' : 'replaced', kind: 'note', path: note.path, message, before })
           return text(`${created ? 'Saved' : 'Replaced'} ${note.path}.`)
         }
         const { file, created } = await store.putFile(path, Readable.from([bytes]), { replacedBy: token.name })
@@ -511,6 +621,203 @@ export function createMcp({ library, store, search, activity, projects, libraryN
       },
     },
     {
+      name: 'list_tasks',
+      readOnly: true,
+      title: 'List tasks',
+      description:
+        "List tasks from the user's task planner. filter: inbox (no project), today (due today or overdue), upcoming, overdue, completed, or all open tasks. Use it to see what the user wants done, or to check before adding a task that may already exist.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          filter: { type: 'string', enum: TASK_FILTERS, default: 'all' },
+          project: { type: 'string', description: 'Only tasks in this task-planner project, by name.' },
+          limit: { type: 'integer', minimum: 1, maximum: 500, default: 100 },
+        },
+      },
+      async run(args) {
+        const filter = TASK_FILTERS.includes(args?.filter) ? args.filter : 'all'
+        const data = await store.loadTasks()
+        const projectName = str(args, 'project', { optional: true, max: 200 })
+        let projectId = null
+        if (projectName) {
+          projectId = findPlannerProject(data, projectName)?.id
+          if (!projectId) return toolError(`No task-planner project called "${projectName}". Projects: ${plannerProjectNames(data)}.`)
+        }
+        const tasks = planner
+          .filterTasks(data.tasks, { filter, project: projectId })
+          .sort(byDueThenPriority)
+          .slice(0, int(args, 'limit', 100, { min: 1, max: 500 }))
+        if (!tasks.length) return text(filter === 'all' ? 'No open tasks.' : `No ${filter} tasks.`)
+        return text(tasks.map((t) => describeTask(t, data)).join('\n'))
+      },
+    },
+    {
+      name: 'add_task',
+      readOnly: false,
+      title: 'Add a task for the user',
+      description:
+        "Add a task to the user's task planner — something you need them to do or decide, such as reviewing a report you wrote. It appears in Deckle's Inbox (or the named project) and in Today when it falls due. Link the note it is about with source_note.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Short and actionable, e.g. "Review the Q3 competitor report".' },
+          due: { type: 'string', description: 'A date as YYYY-MM-DD.' },
+          priority: { type: 'integer', enum: [1, 2, 3, 4], default: 4, description: '1 is most urgent.' },
+          project: { type: 'string', description: 'A task-planner project, by name. Omit for the Inbox.' },
+          source_note: { type: 'string', description: 'The note this task is about, e.g. "Projects/Acme/Report.md".' },
+          recurrence: {
+            type: 'object',
+            properties: {
+              freq: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly'] },
+              interval: { type: 'integer', minimum: 1, default: 1 },
+            },
+          },
+        },
+        required: ['title'],
+      },
+      async run(args, token) {
+        const projectId = await resolvePlannerProject(args)
+        const task = await planner.createTask({
+          title: args?.title,
+          due: args?.due,
+          priority: args?.priority,
+          recurrence: args?.recurrence,
+          projectId,
+          sourceNote: args?.source_note,
+        })
+        await record(token, { action: 'added', kind: 'task', message: task.title })
+        return text(`Added task "${task.title}" (id ${task.id})${task.due ? `, due ${task.due}` : ''}.`)
+      },
+    },
+    {
+      name: 'update_task',
+      readOnly: false,
+      title: 'Update or complete a task',
+      description:
+        'Change a task by its id (from list_tasks): its title, due date, priority or project, or mark it complete. Completing a recurring task moves it to its next date, as the app does.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          title: { type: 'string' },
+          due: { type: ['string', 'null'], description: 'YYYY-MM-DD, or null to clear it.' },
+          priority: { type: 'integer', enum: [1, 2, 3, 4] },
+          project: { type: ['string', 'null'], description: 'A project name, or null for the Inbox.' },
+          completed: { type: 'boolean' },
+        },
+        required: ['id'],
+      },
+      async run(args, token) {
+        const id = str(args, 'id', { max: 200 })
+        const patch = {}
+        for (const key of ['title', 'due', 'priority', 'completed']) {
+          if (args?.[key] !== undefined) patch[key] = args[key]
+        }
+        if (args?.project !== undefined) patch.projectId = await resolvePlannerProject(args)
+        const task = await planner.patchTask(id, patch)
+        await record(token, {
+          action: args?.completed === true ? 'completed' : 'updated',
+          kind: 'task',
+          message: task.title,
+        })
+        const data = await store.loadTasks()
+        return text(`Updated: ${describeTask(task, data)}`)
+      },
+    },
+    {
+      name: 'delete_task',
+      readOnly: false,
+      title: 'Move a task to the bin',
+      description: "Move a task to the planner's bin by its id. The user can restore it for 30 days.",
+      inputSchema: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+      async run(args, token) {
+        const { task } = await planner.deleteTask(str(args, 'id', { max: 200 }))
+        await record(token, { action: 'deleted', kind: 'task', message: task.title })
+        return text(`Moved "${task.title}" to the task bin.`)
+      },
+    },
+    {
+      name: 'list_bookmarks',
+      readOnly: true,
+      title: 'List bookmarks',
+      description: "List the user's saved bookmarks — URLs with titles and comments, in coloured collections — newest first.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          collection: { type: 'string', description: 'Only this collection, by name.' },
+          limit: { type: 'integer', minimum: 1, maximum: 500, default: 100 },
+        },
+      },
+      async run(args) {
+        const data = await store.loadBookmarks()
+        const name = str(args, 'collection', { optional: true, max: 200 })
+        let list = data.bookmarks
+        if (name) {
+          const collection = findByName(data.collections, name)
+          if (!collection) return toolError(`No bookmark collection called "${name}".`)
+          list = list.filter((b) => b.collectionId === collection.id)
+        }
+        list = [...list].sort((a, b) => b.createdAt - a.createdAt).slice(0, int(args, 'limit', 100, { min: 1, max: 500 }))
+        if (!list.length) return text('No bookmarks.')
+        const names = new Map(data.collections.map((c) => [c.id, c.name]))
+        return text(
+          list
+            .map(
+              (b) =>
+                `- ${b.title} — ${b.url}` +
+                (b.collectionId ? ` [${names.get(b.collectionId) ?? 'unknown collection'}]` : '') +
+                (b.comment ? `\n  ${b.comment.split('\n')[0]}` : ''),
+            )
+            .join('\n'),
+        )
+      },
+    },
+    {
+      name: 'save_bookmark',
+      readOnly: false,
+      title: 'Save a bookmark',
+      description:
+        "Save a web page to the user's bookmarks — a source you used, or something worth their reading — with a comment on why it matters. Only http and https URLs.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          url: { type: 'string' },
+          title: { type: 'string' },
+          comment: { type: 'string', description: 'Why it is worth keeping.' },
+          collection: { type: 'string', description: 'An existing collection, by name. Omit for none.' },
+          source_note: { type: 'string', description: 'The note that cites it.' },
+        },
+        required: ['url'],
+      },
+      async run(args, token) {
+        let collectionId = null
+        const name = str(args, 'collection', { optional: true, max: 200 })
+        if (name) {
+          const data = await store.loadBookmarks()
+          const collection = findByName(data.collections, name)
+          if (!collection) {
+            return toolError(
+              `No bookmark collection called "${name}". Collections: ${data.collections.map((c) => c.name).join(', ') || 'none'}.`,
+            )
+          }
+          collectionId = collection.id
+        }
+        const bookmark = await planner.createBookmark({
+          url: args?.url,
+          title: args?.title,
+          comment: args?.comment,
+          collectionId,
+          sourceNote: args?.source_note,
+        })
+        await record(token, { action: 'saved', kind: 'bookmark', message: `${bookmark.title} — ${bookmark.url}` })
+        return text(`Saved bookmark "${bookmark.title}".`)
+      },
+    },
+    {
       name: 'move',
       readOnly: false,
       title: 'Move or rename',
@@ -575,7 +882,7 @@ export function createMcp({ library, store, search, activity, projects, libraryN
       annotations: {
         title: tool.title,
         readOnlyHint: tool.readOnly,
-        destructiveHint: tool.name === 'delete' || tool.name === 'save_file' || tool.name === 'write_note',
+        destructiveHint: ['delete', 'save_file', 'write_note', 'edit_note', 'delete_task'].includes(tool.name),
         idempotentHint: tool.readOnly,
         openWorldHint: false,
       },
@@ -608,7 +915,7 @@ export function createMcp({ library, store, search, activity, projects, libraryN
             serverInfo: { name: 'deckle', title: `Deckle — ${libraryName}`, version: VERSION },
             instructions: canWrite
               ? INSTRUCTIONS
-              : `${INSTRUCTIONS}\n\nThis connection uses a read-only token: search, read, list, list_projects and recent_activity are available; nothing can be saved.`,
+              : `${INSTRUCTIONS}\n\nThis connection uses a read-only token: search, read, list, list_projects, recent_activity, list_tasks and list_bookmarks are available; nothing can be saved.`,
           },
         }
       }

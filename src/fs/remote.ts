@@ -327,6 +327,34 @@ export async function statRemote(
 }
 
 /**
+ * Follow the server's live stream of agent changes, calling `onChange` for
+ * each. Resolves when the stream ends — the server restarted, the network
+ * dropped, or `signal` aborted it — and rejects if it could not be opened, so
+ * the caller decides when to try again.
+ *
+ * fetch rather than EventSource: EventSource can't send APP_HEADERS.
+ */
+export async function followRemoteChanges(onChange: () => void, signal: AbortSignal): Promise<void> {
+  const res = await request(`${API}/events`, { signal, headers: { Accept: 'text/event-stream' } })
+  if (!res.body) throw new Error('no event stream')
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) return
+    buffer += decoder.decode(value, { stream: true })
+    // Messages end with a blank line; only "activity" ones mean anything.
+    let end
+    while ((end = buffer.indexOf('\n\n')) !== -1) {
+      const message = buffer.slice(0, end)
+      buffer = buffer.slice(end + 2)
+      if (/^event: activity$/m.test(message)) onChange()
+    }
+  }
+}
+
+/**
  * Ask the server whether it offers a library. Returns null when this build isn't
  * served by the Deckle server at all (a plain static host, or `npm run dev`
  * without the API running), which is what makes the server option appear only

@@ -548,9 +548,10 @@ export function buildOpenApi(libraryName) {
           description:
             'Point an MCP client at this URL with the same bearer token. It answers JSON-RPC ' +
             'POSTs with JSON (no event stream, no session id), and offers the tools search, ' +
-            'read, list, list_projects and recent_activity — plus, for a read-write token, ' +
-            'write_note, save_file, create_project, update_project, log_progress, move and ' +
-            'delete. Requests carrying an Origin header must come from DECKLE_API_CORS_ORIGINS.',
+            'read, list, list_projects, recent_activity, list_tasks and list_bookmarks — plus, ' +
+            'for a read-write token, write_note, edit_note, save_file, create_project, ' +
+            'update_project, log_progress, add_task, update_task, delete_task, save_bookmark, ' +
+            'move and delete. Requests carrying an Origin header must come from DECKLE_API_CORS_ORIGINS.',
           requestBody: jsonBody({ type: 'object', description: 'A JSON-RPC 2.0 message, or a batch of them.' }),
           responses: {
             200: jsonResponse('A JSON-RPC response (or a batch of them).', { type: 'object' }),

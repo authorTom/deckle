@@ -31,9 +31,10 @@ const MIME = {
   '.woff2': 'font/woff2',
   '.txt': 'text/plain; charset=utf-8',
   '.map': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
 }
 
-const COMPRESSIBLE = /^(text\/|application\/(javascript|json)|image\/svg)/
+const COMPRESSIBLE = /^(text\/|application\/(javascript|json|manifest\+json)|image\/svg)/
 const GZIP_MIN_BYTES = 1024
 
 /**

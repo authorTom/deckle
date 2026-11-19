@@ -1,0 +1,535 @@
+/* ---------- Import / export ---------- */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.sidebar-empty-hint {
+  display: block;
+  margin-top: 6px;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+}
+
+.sidebar-empty-hint code {
+  /* Relative on purpose: code should track whatever text it sits inside. */
+  font-size: 0.95em;
+}
+
+/* Library-wide actions live in a footer strip: the header row is already full,
+   and these belong with the library rather than with the open note. */
+.sidebar-footer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border-top: var(--rule) solid var(--border);
+}
+
+.sidebar-footer-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  justify-content: center;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.sidebar-footer-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-footer-btn.icon-only {
+  flex: 0 0 auto;
+}
+
+.modal-note {
+  margin: 6px 10px 14px;
+  font-size: var(--fs-ui);
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.export-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 10px 6px;
+  padding: 10px;
+  border: var(--rule) solid var(--border);
+  border-radius: 8px;
+  font-size: var(--fs-ui);
+  cursor: pointer;
+}
+
+.export-option:hover {
+  background: var(--bg-hover);
+}
+
+.export-option input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.export-option-hint {
+  display: block;
+  margin-top: 3px;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  line-height: var(--lh-ui);
+}
+
+.export-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 12px 10px 6px;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.export-status-done {
+  color: var(--accent);
+}
+
+.export-status-error {
+  color: var(--danger);
+}
+
+/* Two buttons in the export footer, unlike the single-button modals. */
+.modal-footer {
+  gap: 8px;
+}
+
+/* =========================================================================
+   Import progress
+   An import can run for a while on a folder or an archive, and the two things
+   a person needs from it are "is it moving" and "what didn't make it". The bar
+   answers the first; the skip list answers the second, by name and by reason,
+   rather than as a count that leaves you guessing.
+   ========================================================================= */
+.import-progress {
+  padding: 12px 10px 4px;
+}
+
+.import-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--fs-ui);
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.import-progress-count {
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+/* Filled by scaling, not by animating width: the bar advances many times over
+   a large import, and width would lay the page out again on every step. The
+   track clips and rounds it, so the scaled edge is never seen. */
+.progress-fill {
+  height: 100%;
+  width: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+/* Reading a dropped folder has no total until the walk ends. A bar that
+   claimed a percentage there would be inventing one, so it sweeps instead. */
+.progress-track.indeterminate .progress-fill {
+  width: 35%;
+  transform: none;
+  animation: progress-sweep 1.1s var(--ease-in-out) infinite;
+}
+
+@keyframes progress-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
+/* With motion off the sweep would freeze wherever it stopped — off the end of
+   the track, i.e. an empty bar during a running import. Rest it full and dimmed
+   instead: "working, amount unknown" said without moving. */
+@media (prefers-reduced-motion: reduce) {
+  .progress-track.indeterminate .progress-fill {
+    width: 100%;
+    transform: none;
+    animation: none;
+    opacity: 0.5;
+  }
+}
+
+.import-progress-file {
+  margin-top: 8px;
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.import-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 10px;
+  padding: 11px 12px;
+  border: var(--rule) solid var(--border);
+  border-radius: 8px;
+  font-size: var(--fs-ui);
+  line-height: var(--lh-ui);
+  color: var(--text);
+}
+
+.import-result-done {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.import-result-error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.import-result-detail {
+  margin-top: 3px;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  font-weight: var(--fw-body);
+}
+
+.import-skips {
+  margin: 0 10px 10px;
+}
+
+.import-skips-title {
+  font-size: var(--fs-label);
+  font-weight: var(--fw-label);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-faint);
+  margin-bottom: 6px;
+}
+
+.import-skip-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  border: var(--rule) solid var(--border);
+  border-radius: 8px;
+}
+
+.import-skip {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  font-size: var(--fs-sm);
+}
+
+.import-skip + .import-skip {
+  border-top: var(--rule) solid var(--border);
+}
+
+.import-skip-name {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.import-skip-reason {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+
+.import-skips-more {
+  margin-top: 6px;
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+
+/* =========================================================================
+   About
+   Three questions and no more: what this is, which version, and where the
+   notes are. Narrower than the working dialogs because it holds a paragraph,
+   not a list — a 560px box around six lines reads as an empty room.
+   ========================================================================= */
+.about-modal {
+  width: min(92vw, 400px);
+}
+
+.about-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px 20px 8px;
+}
+
+.about-masthead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.about-mark {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.about-names {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.about-wordmark {
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-display);
+  letter-spacing: var(--track-display);
+}
+
+/* The one string in here anyone needs to copy, so it is selectable and set in
+   lining figures rather than shrunk into decoration. */
+.about-version {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  user-select: text;
+}
+
+.about-lede {
+  margin: 0;
+  font-size: var(--fs-ui);
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.about-facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: var(--rule) solid var(--border);
+}
+
+.about-fact {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: var(--fs-sm);
+}
+
+.about-fact dt {
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.about-fact dd {
+  margin: 0;
+  color: var(--text);
+  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.about-links {
+  display: flex;
+  gap: 16px;
+  padding-top: 14px;
+  border-top: var(--rule) solid var(--border);
+}
+
+.about-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-sm);
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.about-link:hover {
+  text-decoration: underline;
+}
+
+.about-footer {
+  justify-content: flex-start;
+}
+
+.about-licence {
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+
+/* =========================================================================
+   Folder picker
+   The one place "where should this go" is answered — by the move dialog and
+   by an import alike. It is a list rather than a tree you walk down: the
+   whole library is short enough to show, and a destination you can see is
+   quicker to pick than one you have to open your way to. The filter takes
+   over when it isn't, and doubles as the field that names a folder that
+   doesn't exist yet.
+   ========================================================================= */
+.folder-picker {
+  margin: 0 10px 6px;
+  border: var(--rule) solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.folder-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: var(--rule) solid var(--border);
+  color: var(--text-faint);
+}
+
+.folder-picker-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-md);
+  color: var(--text);
+  outline: none;
+}
+
+.folder-picker-list {
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.folder-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 7px;
+  color: var(--text);
+  text-align: left;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.folder-picker-row:hover {
+  background: var(--bg-hover);
+}
+
+/* The chosen row, not merely the hovered one — the arrow keys move this, and
+   it is what the footer button will act on. */
+.folder-picker-row.selected {
+  background: var(--accent-soft);
+}
+
+.folder-picker-row.selected .folder-picker-icon {
+  color: var(--accent);
+}
+
+.folder-picker-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-faint);
+}
+
+.folder-picker-name {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-picker-path {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-picker-meta {
+  margin-left: auto;
+  padding-left: 8px;
+  flex-shrink: 0;
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+
+/* A folder that will be created by the very act of putting something in it,
+   coloured so it doesn't read as one that is already there. */
+.folder-picker-row.is-new .folder-picker-icon,
+.folder-picker-row.is-new .folder-picker-meta {
+  color: var(--accent);
+}
+
+.folder-picker-empty {
+  padding: 18px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+}
+
+.modal-footer .btn-primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* A search result is two or three lines tall, so its actions sit with the
+   title rather than floating in the middle of the snippet. */
+.search-result .tree-actions {
+  align-self: flex-start;
+  margin-top: 1px;
+}

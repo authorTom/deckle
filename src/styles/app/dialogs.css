@@ -1,0 +1,360 @@
+/* =========================================================================
+   Keyboard sheet
+   The app rewards fluency and, until now, never said how. Two columns so the
+   keys form a scannable edge down the left rather than hiding inside prose,
+   and the keycaps reuse the palette trigger's own cap so the reference looks
+   like the thing it describes.
+   ========================================================================= */
+.shortcuts-modal {
+  width: min(94vw, 680px);
+  max-height: 80vh;
+}
+
+.shortcuts-body {
+  padding: 4px 18px 18px;
+}
+
+.shortcut-group + .shortcut-group {
+  margin-top: 22px;
+}
+
+.shortcut-group-title {
+  margin: 0 0 8px;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-label);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-faint);
+}
+
+.shortcut-list {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  gap: 2px 16px;
+  align-items: baseline;
+}
+
+.shortcut-row {
+  display: contents;
+}
+
+.shortcut-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+  padding: 4px 0;
+}
+
+.shortcut-keys kbd {
+  font-family: inherit;
+  font-size: var(--fs-meta);
+  line-height: 1.4;
+  padding: 2px 6px;
+  border: var(--rule-hair) solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.shortcut-what {
+  margin: 0;
+  padding: 4px 0;
+  font-size: var(--fs-ui);
+  line-height: var(--lh-ui);
+  color: var(--text);
+}
+
+.shortcuts-footer {
+  justify-content: flex-start;
+  align-items: baseline;
+  gap: 16px;
+}
+
+.shortcut-footnote {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-ui);
+  color: var(--text-muted);
+}
+
+/* Which Deckle this is. Pushed to the far end and dimmed: it earns its place by
+   being findable when someone files a bug, not by being read every time. */
+.shortcut-version {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 620px) {
+  .shortcut-list {
+    grid-template-columns: 1fr;
+    gap: 0 0;
+  }
+
+  .shortcut-keys {
+    justify-content: flex-start;
+    padding-top: 8px;
+  }
+
+  .shortcut-what {
+    padding-top: 0;
+    padding-bottom: 6px;
+  }
+}
+
+.palette-footer {
+  display: flex;
+  gap: 16px;
+  padding: 8px 14px;
+  border-top: var(--rule) solid var(--border);
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+
+/* Pushed to the far end: it is an offer, not one of the three keys you need
+   right now to work the palette in front of you. */
+.palette-footer-end {
+  margin-left: auto;
+}
+
+/* ---------- Modal (recycle bin) ---------- */
+/* One grammar for everything that floats over the page.
+   Five of these surfaces used to arrive with a keyframe and then vanish on
+   close, which left the page snapping back with no account of where the thing
+   went. A transition pair can run both ways, so they now leave the way they
+   came — and the durations are deliberately asymmetric: the base rule carries
+   the exit (--dur-fast) and `.entered` carries the entrance (--dur-base),
+   because arriving is worth watching and leaving is just getting out of the
+   way. A slow exit reads as lag. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.4);
+  /* The page behind doesn't just dim, it goes out of focus — the scrim's job
+     stated in the material rather than only in opacity. */
+  backdrop-filter: blur(2px);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 12vh 16px 16px;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.modal-overlay.entered {
+  opacity: 1;
+  transition-duration: var(--dur-base);
+}
+
+.modal {
+  width: min(92vw, 560px);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  border: var(--rule) solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  /* Scaled down and lifted, so it reads as dropping into place rather than
+     zooming at the reader — the same arrival the palette has always used. */
+  opacity: 0;
+  transform: scale(0.97) translateY(-8px);
+  transition: opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.modal.entered {
+  opacity: 1;
+  transform: none;
+  transition-duration: var(--dur-base);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 12px 18px;
+  border-bottom: var(--rule) solid var(--border);
+}
+
+.modal-title {
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semi);
+}
+
+.modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.modal-empty {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: var(--fs-md);
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 14px;
+  border-top: var(--rule) solid var(--border);
+}
+
+.trash-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.trash-row:hover {
+  background: var(--bg-hover);
+}
+
+.trash-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.trash-title {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trash-meta {
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.icon-btn.trash-danger:hover {
+  color: var(--danger);
+}
+
+/* ---------- Version history modal ---------- */
+.history-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.history-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.history-preview {
+  margin: 0 10px 10px 33px;
+  padding: 10px 12px;
+  max-height: 240px;
+  overflow: auto;
+  /* Deliberately echoes the blockquote rule in editor.css: this is a quoted
+     excerpt of an older version of the note. */
+  /* impeccable-disable-next-line side-tab */
+  border-left: 2px solid var(--border);
+  background: var(--bg-hover);
+  border-radius: 0 8px 8px 0;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-muted);
+}
+
+/* ---------- Empty state ---------- */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-faint);
+  gap: 12px;
+  text-align: center;
+  padding: 24px;
+}
+
+.empty-state h2 {
+  margin: 0;
+  font-weight: var(--fw-semi);
+  color: var(--text-muted);
+}
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+}
+
+.btn-primary:hover {
+  filter: brightness(1.05);
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: var(--rule) solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-ui);
+}
+
+.btn-secondary:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.empty-state p {
+  max-width: 380px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.sidebar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.gate-theme {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+}

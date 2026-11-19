@@ -1,0 +1,935 @@
+/* =========================================================================
+   Docked panels
+   The dock owns the width so it can animate between zero and the user's
+   chosen size; the panel inside just fills it.
+   ========================================================================= */
+.sidebar-dock,
+.task-dock {
+  position: relative;
+  flex-shrink: 0;
+  height: 100%;
+  display: flex;
+  overflow: hidden;
+  /* A transform would slide the panel *over* the editor; width makes it push
+     the editor aside, which is the behaviour being designed for. Runs on
+     open/close only — the drag path disables this transition entirely. */
+  /* impeccable-disable-next-line layout-transition */
+  transition: width var(--dur-slow) var(--ease-out),
+    opacity var(--dur-base) var(--ease-out);
+}
+
+/* The panel's own contents follow the edge in, a beat behind it, so the slide
+   reads as one movement instead of a box that suddenly contains something. */
+.task-dock > .task-panel {
+  opacity: 0;
+  transform: translateX(-8px);
+  transition: opacity var(--dur-base) var(--ease-out) 60ms,
+    transform var(--dur-base) var(--ease-out) 60ms;
+}
+
+.task-dock.open > .task-panel {
+  opacity: 1;
+  transform: none;
+}
+
+/* A dock mid-drag must not animate — the width is already following the
+   pointer, and a transition on top of that lags behind the cursor. */
+.sidebar-dock:has(.resize-handle.dragging),
+.task-dock:has(.resize-handle.dragging) {
+  transition: none;
+}
+
+/* ---------- Resize handles ---------- */
+.resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  z-index: 5;
+  cursor: col-resize;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.resize-handle-right {
+  right: 0;
+}
+
+.resize-handle-left {
+  left: 0;
+}
+
+/* A bottom edge is horizontal — the panel grows downwards, not sideways — so
+   this one resets the vertical geometry the base rule assumes. */
+.resize-handle-bottom {
+  top: auto;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  width: auto;
+  height: 9px;
+  cursor: row-resize;
+}
+
+/* A hairline that only appears once you're on it. */
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%) scaleX(0);
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.resize-handle:hover::after,
+.resize-handle:focus-visible::after,
+.resize-handle.dragging::after {
+  opacity: 1;
+  transform: translateX(-50%) scaleX(1);
+}
+
+/* The same hairline, laid on its side. */
+.resize-handle-bottom::after {
+  top: 50%;
+  bottom: auto;
+  left: 0;
+  right: 0;
+  width: auto;
+  height: 2px;
+  transform: translateY(-50%) scaleY(0);
+}
+
+.resize-handle-bottom:hover::after,
+.resize-handle-bottom:focus-visible::after,
+.resize-handle-bottom.dragging::after {
+  transform: translateY(-50%) scaleY(1);
+}
+
+.resize-handle:focus-visible {
+  outline: none;
+}
+
+/* =========================================================================
+   Tab strip
+   ========================================================================= */
+.tab-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0 8px;
+  border-bottom: var(--rule) solid var(--border);
+  background: var(--bg);
+  min-height: 38px;
+}
+
+.tab-strip-scroll {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab-strip-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  max-width: 200px;
+  padding: 0 8px 0 10px;
+  border-radius: 8px 8px 0 0;
+  color: var(--text-muted);
+  font-size: var(--fs-ui);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
+  animation: tab-in var(--dur-base) var(--ease-out);
+}
+
+@keyframes tab-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.tab:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.tab.active {
+  color: var(--text);
+  background: var(--bg-elevated);
+}
+
+/* The active tab's underline slides rather than blinking between tabs. */
+.tab::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 2.5px;
+  border-radius: 999px 999px 0 0;
+  background: var(--accent);
+  transform: scaleX(0);
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.tab.active::after {
+  transform: scaleX(1);
+}
+
+.tab.in-split {
+  box-shadow: inset 0 0 0 var(--rule) var(--border);
+}
+
+.tab.dragging {
+  opacity: 0.4;
+}
+
+.tab.drop-before {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.tab-icon {
+  flex-shrink: 0;
+  color: var(--text-faint);
+}
+
+.tab.active .tab-icon {
+  color: var(--accent);
+}
+
+.tab-label {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-faint);
+  animation: dot-in var(--dur-base) var(--ease-out);
+}
+
+@keyframes dot-in {
+  from {
+    transform: scale(0);
+  }
+}
+
+.tab-close {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 2px;
+  border-radius: 4px;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out);
+}
+
+.tab:hover .tab-close,
+.tab.active .tab-close {
+  opacity: 1;
+}
+
+.tab-close:hover {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+.tab-split-btn {
+  align-self: center;
+  flex-shrink: 0;
+}
+
+.icon-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* =========================================================================
+   Editor panes
+   ========================================================================= */
+.panes {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.panes.split .pane {
+  flex: 1 1 50%;
+}
+
+.pane-divider {
+  width: 1px;
+  flex-shrink: 0;
+  background: var(--border);
+}
+
+.pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  /* Fixed height so both panes' headers line up, whether or not the pane has
+     a close button in it. */
+  min-height: 34px;
+  padding: 0 6px 0 14px;
+  border-bottom: var(--rule) solid var(--border);
+  background: var(--bg-elevated);
+  animation: pane-in var(--dur-slow) var(--ease-out);
+}
+
+@keyframes pane-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+
+.pane-title {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semi);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Which pane the toolbar and title bar are pointed at, stated quietly. */
+.panes.split .pane.focused .pane-header {
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.pane-close {
+  width: 28px;
+  height: 28px;
+}
+
+/* Switching notes is a fresh mount, so the new document rises into place
+   instead of hard-cutting. When the switch had a direction along the tab strip,
+   EditorPane overrides --enter-x and the page arrives from that side instead —
+   the note comes from where you reached for it. */
+.editor-wrap {
+  position: relative;
+  animation: note-in var(--dur-base) var(--ease-out);
+}
+
+@keyframes note-in {
+  from {
+    opacity: 0;
+    transform: translate(var(--enter-x, 0), var(--enter-y, 6px));
+  }
+}
+
+/* The heading flies from the tab or tree row that opened it — see EditorPane.
+   The animation is scripted, but the origin has to be set here or the scale
+   would pull the title toward its own centre instead of its top-left. */
+.ProseMirror h1 {
+  transform-origin: left top;
+}
+
+/* =========================================================================
+   Wikilinks
+   ========================================================================= */
+.wikilink {
+  color: var(--accent);
+  border-bottom: var(--rule-hair) solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.wikilink:hover {
+  background: var(--accent-soft);
+}
+
+.wikilink.broken {
+  color: var(--text-faint);
+  border-bottom-style: dashed;
+  border-bottom-color: var(--text-faint);
+  cursor: default;
+}
+
+.wikilink-suggest {
+  position: fixed;
+  z-index: 70;
+  width: min(340px, 90vw);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: var(--rule) solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  animation: suggest-in var(--dur-fast) var(--ease-out);
+}
+
+@keyframes suggest-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.wikilink-suggest-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: none;
+  background: transparent;
+  border-radius: 7px;
+  color: var(--text);
+  font-size: var(--fs-ui);
+  text-align: left;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.wikilink-suggest-item.selected {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.wikilink-suggest-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wikilink-suggest-path {
+  flex-shrink: 0;
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+
+/* =========================================================================
+   Backlinks
+   ========================================================================= */
+.backlinks {
+  margin-top: 48px;
+  border-top: var(--rule) solid var(--border);
+  padding-top: 10px;
+}
+
+.backlinks-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semi);
+}
+
+.backlinks-head:hover {
+  color: var(--text);
+}
+
+.backlinks-chevron {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.backlinks.open .backlinks-chevron {
+  transform: rotate(90deg);
+}
+
+/* 0fr → 1fr animates to the content's natural height without measuring it. */
+.backlinks-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--dur-slow) var(--ease-out);
+}
+
+.backlinks.open .backlinks-body {
+  grid-template-rows: 1fr;
+}
+
+.backlinks-inner {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.backlink {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  text-align: left;
+  color: var(--text);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.backlink:hover {
+  background: var(--bg-hover);
+}
+
+.backlink-title {
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-medium);
+}
+
+.backlink-context {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: var(--lh-ui);
+}
+
+/* =========================================================================
+   Document outline
+   ========================================================================= */
+.outline {
+  width: 200px;
+  flex-shrink: 0;
+  align-self: flex-start;
+  position: sticky;
+  top: 0;
+  padding: 36px 16px 24px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.outline-title {
+  font-weight: var(--fw-label);
+  font-size: var(--fs-label);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-faint);
+  padding: 0 8px 6px;
+}
+
+.outline-item {
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--text-faint);
+  border-left: 2px solid transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out);
+}
+
+.outline-item:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.outline-item.active {
+  color: var(--accent);
+  border-left-color: var(--accent);
+}
+
+.outline-item.level-2 {
+  padding-left: 18px;
+}
+
+.outline-item.level-3 {
+  padding-left: 28px;
+}
+
+/* Below this the gutter steals width the prose needs. Measured against the
+   workspace, not the window: three open panels can leave the editor narrow on
+   a wide screen, and that's exactly when the outline has to go. A split halves
+   it again, so each pane drops its outline sooner. */
+@container workspace (max-width: 1100px) {
+  .outline {
+    display: none;
+  }
+}
+
+@container workspace (max-width: 1700px) {
+  .panes.split .outline {
+    display: none;
+  }
+}
+
+/* =========================================================================
+   Overflow menu
+   ========================================================================= */
+.overflow-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.menu-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  z-index: 70;
+  min-width: 232px;
+  padding: 5px;
+  background: var(--bg-elevated);
+  border: var(--rule) solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  animation: menu-in var(--dur-fast) var(--ease-out);
+  transform-origin: top right;
+}
+
+.menu-popover.align-left {
+  left: 0;
+  transform-origin: top left;
+}
+
+.menu-popover.align-right {
+  right: 0;
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-6px);
+  }
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 7px;
+  color: var(--text);
+  font-size: var(--fs-ui);
+  text-align: left;
+  transition: background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.menu-item.selected:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.menu-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.menu-item.separated {
+  margin-top: 5px;
+  padding-top: 11px;
+  border-top: var(--rule) solid var(--border);
+  border-radius: 0 0 7px 7px;
+}
+
+.menu-item.danger:hover {
+  color: var(--danger);
+}
+
+.menu-item-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.menu-item-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.menu-item-hint {
+  flex-shrink: 0;
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+
+/* =========================================================================
+   Save indicator
+   ========================================================================= */
+.save-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+  /* Four states share this one chip, and the chip is the app's only standing
+     answer to "did that save?". Easing the colour and the chip's own surface
+     between them makes the change read as one thing changing rather than four
+     things swapping — except the failure, which is allowed to arrive. */
+  transition: color var(--dur-base) var(--ease-out),
+    background-color var(--dur-base) var(--ease-out);
+}
+
+.save-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  transition: background-color var(--dur-base) var(--ease-out);
+}
+
+.save-indicator.unsaved {
+  color: var(--text-muted);
+}
+
+/* A failed write is the one status worth breaking the whisper for: it is the
+   only one the user has to do something about, and in a local-first app it is
+   the only moment the promise is actually in question. Full text colour, the
+   danger hue, and a tinted chip so it reads as a state rather than a label. */
+.save-indicator.error {
+  /* The one state that should not ease in: a failed write has to register.
+     It arrives at full strength on the same curve everything else leaves on. */
+  animation: save-alarm var(--dur-fast) var(--ease-out);
+  gap: 5px;
+  padding: 3px 9px 3px 7px;
+  border-radius: 999px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  font-weight: var(--fw-medium);
+}
+
+.save-indicator.saving .save-dot {
+  animation: save-pulse 1s var(--ease-in-out) infinite;
+}
+
+.save-indicator.saved .save-dot {
+  animation: save-settle var(--dur-slow) var(--ease-out);
+}
+
+@keyframes save-alarm {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+}
+
+@keyframes save-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@keyframes save-settle {
+  from {
+    transform: scale(1.6);
+  }
+}
+
+@media (max-width: 900px) {
+  .save-label {
+    display: none;
+  }
+
+  /* "Saved" can go quiet on a narrow screen; "Not saved" cannot. An unlabelled
+     red dot is a decoration, not a warning. */
+  .save-indicator.error .save-label {
+    display: inline;
+  }
+}
+
+/* =========================================================================
+   Confirm dialog
+   ========================================================================= */
+.confirm-overlay {
+  align-items: center;
+  padding: 16px;
+}
+
+/* A confirmation is a smaller, closer thing than a full modal, so it rises a
+   little less far. Everything else — the timing, the asymmetry, the backdrop —
+   comes from .modal-overlay / .modal. */
+.confirm-dialog {
+  width: min(92vw, 420px);
+  max-height: none;
+  padding: 20px;
+  gap: 18px;
+  transform: scale(0.96) translateY(6px);
+}
+
+.confirm-dialog.entered {
+  opacity: 1;
+  transform: none;
+}
+
+.confirm-body {
+  display: flex;
+  gap: 12px;
+}
+
+.confirm-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--danger);
+}
+
+.confirm-title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semi);
+}
+
+.confirm-text {
+  margin: 6px 0 0;
+  font-size: var(--fs-ui);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.btn-quiet {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: var(--rule) solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-ui);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.btn-quiet:hover {
+  background: var(--bg-hover);
+}
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: none;
+  background: var(--danger);
+  color: #fff;
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-medium);
+  transition: filter var(--dur-fast) var(--ease-out);
+}
+
+.btn-danger:hover {
+  filter: brightness(1.08);
+}
+
+/* =========================================================================
+   Loading skeletons
+   ========================================================================= */
+.skeleton-wrap {
+  animation: none;
+}
+
+.skeleton {
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-hover) 25%,
+    var(--bg-active) 37%,
+    var(--bg-hover) 63%
+  );
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton-title {
+  height: 30px;
+  width: 55%;
+  margin-bottom: 26px;
+}
+
+.skeleton-line {
+  height: 13px;
+  margin-bottom: 13px;
+}
+
+.skeleton-line.short {
+  margin-bottom: 26px;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+/* =========================================================================
+   First-run empty state
+   Rendered inside the panes rather than over the whole app, so the note list
+   it refers to stays visible beside it.
+   ========================================================================= */
+.panes > .empty-state {
+  flex: 1;
+  animation: fade-in var(--dur-slow) var(--ease-out);
+}
+
+/* The last keyframe fade in the app: this panel has no closed state to
+   transition from, so it genuinely needs one. */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}

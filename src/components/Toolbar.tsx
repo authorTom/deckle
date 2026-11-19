@@ -1,4 +1,4 @@
-import { Fragment, useRef, useState } from 'react'
+import { Fragment, useEffect, useReducer, useRef, useState } from 'react'
 import type { Editor } from '@tiptap/react'
 import {
   blockActions,
@@ -68,6 +68,17 @@ export default function Toolbar({ editor }: { editor: Editor }) {
   // reaching the writing and giving up on it.
   const [activeIndex, setActiveIndex] = useState(0)
   const buttons = useRef<(HTMLButtonElement | null)[]>([])
+
+  // The buttons show what is active at the caret, so redraw whenever the
+  // editor's state moves — typing, or just moving the caret into bold text.
+  // The toolbar sits outside the editor's pane, so nothing else redraws it.
+  const [, redraw] = useReducer((n: number) => n + 1, 0)
+  useEffect(() => {
+    editor.on('transaction', redraw)
+    return () => {
+      editor.off('transaction', redraw)
+    }
+  }, [editor])
 
   const move = (to: number) => {
     const next = (to + BUTTON_COUNT) % BUTTON_COUNT

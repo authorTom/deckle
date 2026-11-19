@@ -263,7 +263,7 @@ export default function TopBar({
         className="palette-trigger"
         onClick={onOpenPalette}
         title={`Command palette (${MOD_KEY}+K)`}
-        aria-label="Open command palette"
+        aria-keyshortcuts="Control+K Meta+K"
       >
         <Search size={15} />
         <span className="palette-trigger-label">Search &amp; commands</span>

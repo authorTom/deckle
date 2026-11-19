@@ -41,6 +41,21 @@ and, for large files and whole folders, through `scripts/deckle_push.py`.
 - **After each meaningful step** — `log_progress` with what you did, what you
   decided and why, and what is next.
 - **When the user asks what you know** about something, or to find a file.
+- **When you need the user to do or decide something** — review a report,
+  approve a plan, supply a password you must not store — `add_task` with
+  `source_note` set to the note it is about. It lands in their planner, where
+  they will see it; a request made only in the conversation is easily lost.
+  `list_tasks` shows what they have asked for and what is already queued.
+- **When you rely on a web source** — `save_bookmark` it with a comment on
+  why it matters.
+
+## Changing a note
+
+- To change part of a note — a status line, one section, a typo — `read` it,
+  then `edit_note` with the exact text to replace. It never undoes edits the
+  user made meanwhile; if the text has changed, read the note again.
+- Use `write_note` with `mode: replace` only to rewrite a note completely, and
+  `mode: append` to add to the end.
 
 ## How work is organised
 

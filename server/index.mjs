@@ -60,6 +60,7 @@ server.listen(config.port, () => app.logStartup())
 // Compose runs this with init:true, so SIGTERM arrives on `docker compose down`.
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, () => {
+    app.closeStreams()
     server.close(() => process.exit(0))
     // Idle keep-alive sockets would otherwise hold close() open until they
     // time out on their own.

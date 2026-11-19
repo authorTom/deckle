@@ -237,7 +237,7 @@ describe('the activity log', () => {
   })
 
   it('rolls the file over when it grows, and still reads both halves', async () => {
-    const log = createActivityLog(lib, { maxBytes: 400 })
+    const log = createActivityLog(lib, { maxBytes: 800 })
     for (let i = 0; i < 12; i++) await log.record({ actor: 'a', action: 'created', path: `n${i}.md` })
     expect(await lib.exists('.deckle/activity.1.jsonl')).toBe('file')
     const events = await log.list({ limit: 100 })

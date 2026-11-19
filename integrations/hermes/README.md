@@ -10,7 +10,7 @@ Three pieces, all in this folder or already in Deckle:
 
 | Piece | What it does |
 | --- | --- |
-| Deckle's MCP server, at `/api/v1/mcp` | The tools Hermes calls: `search`, `read`, `list`, `list_projects`, `recent_activity`, `write_note`, `save_file`, `create_project`, `update_project`, `log_progress`, `move`, `delete` |
+| Deckle's MCP server, at `/api/v1/mcp` | The tools Hermes calls: `search`, `read`, `list`, `list_projects`, `recent_activity`, `list_tasks`, `list_bookmarks`, `write_note`, `edit_note`, `save_file`, `create_project`, `update_project`, `log_progress`, `add_task`, `update_task`, `delete_task`, `save_bookmark`, `move`, `delete` |
 | [`skills/deckle/SKILL.md`](skills/deckle/SKILL.md) | Teaches Hermes when to use them, how to organise projects, and what never to store |
 | [`skills/deckle/scripts/deckle_push.py`](skills/deckle/scripts/deckle_push.py) | Sends large files and whole folders, which MCP is not built for |
 

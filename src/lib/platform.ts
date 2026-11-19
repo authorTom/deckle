@@ -25,3 +25,6 @@ export const IS_APPLE = isApplePlatform()
 
 /** The modifier as the user's own keyboard prints it. */
 export const MOD_KEY = IS_APPLE ? '⌘' : 'Ctrl'
+
+/** Alt, as the user's own keyboard prints it. */
+export const ALT_KEY = IS_APPLE ? '⌥' : 'Alt'

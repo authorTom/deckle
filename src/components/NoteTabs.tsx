@@ -66,8 +66,10 @@ export default function NoteTabs({
   }
 
   return (
-    <div className="tab-strip" role="tablist" aria-label="Open notes" ref={stripRef}>
-      <div className="tab-strip-scroll">
+    <div className="tab-strip" ref={stripRef}>
+      {/* The tablist is the scroller, so it holds tabs and nothing else; the
+          split button beside it is its own control. */}
+      <div className="tab-strip-scroll" role="tablist" aria-label="Open notes">
         {notes.map((note, i) => {
           const active = note.id === activeId
           const Icon = iconFor(note)
@@ -78,6 +80,7 @@ export default function NoteTabs({
               role="tab"
               tabIndex={active ? 0 : -1}
               aria-selected={active}
+              aria-keyshortcuts="Delete"
               title={note.id}
               draggable
               className={[
@@ -95,6 +98,12 @@ export default function NoteTabs({
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault()
                   select(e.currentTarget, note.id)
+                } else if (e.key === 'Delete' || e.key === 'Backspace') {
+                  // The keyboard's way to the close button, which is
+                  // pointer-only: a control nested in a tab can't be reached
+                  // or announced properly.
+                  e.preventDefault()
+                  onClose(note.id)
                 } else {
                   onTabKeyDown(e, i)
                 }
@@ -130,12 +139,15 @@ export default function NoteTabs({
             >
               <Icon size={14} className="tab-icon" />
               <span className="tab-label">{note.title}</span>
-              {isDirty(note.id) && <span className="tab-dot" aria-label="Unsaved" />}
+              {isDirty(note.id) && (
+                <span className="tab-dot">
+                  <span className="visually-hidden">Unsaved</span>
+                </span>
+              )}
               <span
                 className="tab-close"
-                role="button"
-                tabIndex={-1}
-                aria-label={`Close ${note.title}`}
+                aria-hidden="true"
+                title={`Close ${note.title}`}
                 onClick={(e) => {
                   e.stopPropagation()
                   onClose(note.id)

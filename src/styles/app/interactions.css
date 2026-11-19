@@ -1,0 +1,209 @@
+/* =========================================================================
+   Micro-interactions
+   Present on every control: the absence of press feedback is most of what
+   makes an interface feel flat.
+   ========================================================================= */
+.icon-btn:active,
+.toolbar-btn:active,
+.tab-close:active,
+.sidebar-footer-btn:active,
+.btn-primary:active,
+.btn-quiet:active,
+.btn-danger:active,
+.menu-item:active,
+.task-pill:active {
+  transform: scale(0.94);
+  transition: transform 80ms var(--ease-out);
+}
+
+.btn-primary,
+.sidebar-footer-btn,
+.task-pill {
+  transition: background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+/* ---------- Task completion ---------- */
+/* Lucide draws the tick as a single stroked path, so it can be drawn on. */
+.task-check svg {
+  overflow: visible;
+}
+
+.task-check svg path {
+  stroke-dasharray: 26;
+  stroke-dashoffset: 26;
+  transition: stroke-dashoffset var(--dur-base) var(--ease-out);
+}
+
+.task-item.done .task-check svg path,
+.task-item.completing .task-check svg path {
+  stroke-dashoffset: 0;
+}
+
+.task-item.completing .task-check {
+  animation: check-pop var(--dur-base) var(--ease-out);
+}
+
+@keyframes check-pop {
+  50% {
+    transform: scale(1.18);
+  }
+}
+
+/* Ticked items leave rather than vanish: the check draws, then the row folds. */
+.task-item.completing {
+  animation: task-complete 320ms var(--ease-in-out) forwards;
+  overflow: hidden;
+}
+
+@keyframes task-complete {
+  0%,
+  55% {
+    opacity: 1;
+    max-height: 200px;
+  }
+  100% {
+    opacity: 0;
+    max-height: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+}
+
+.task-item {
+  animation: row-in var(--dur-base) var(--ease-out);
+}
+
+/* ---------- Toast ---------- */
+.toast {
+  opacity: 0;
+  transform: translate(-50%, 8px);
+  transition: opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
+  animation: none;
+}
+
+.toast.entered {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* =========================================================================
+   Editor content added by the new extensions
+   ========================================================================= */
+.ProseMirror ul[data-type='taskList'] {
+  list-style: none;
+  padding-left: 0.25em;
+}
+
+.ProseMirror ul[data-type='taskList'] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.ProseMirror ul[data-type='taskList'] li > label {
+  flex-shrink: 0;
+  margin-top: 0.35em;
+  user-select: none;
+}
+
+.ProseMirror ul[data-type='taskList'] li > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.ProseMirror ul[data-type='taskList'] input[type='checkbox'] {
+  accent-color: var(--accent);
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.ProseMirror ul[data-type='taskList'] input[type='checkbox']:checked {
+  transform: scale(1.1);
+}
+
+.ProseMirror table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  overflow: hidden;
+  margin: 1em 0;
+}
+
+.ProseMirror th,
+.ProseMirror td {
+  border: var(--rule-hair) solid var(--border);
+  padding: 7px 10px;
+  vertical-align: top;
+  position: relative;
+}
+
+.ProseMirror th {
+  background: var(--bg-elevated);
+  font-weight: var(--fw-semi);
+  text-align: left;
+}
+
+.ProseMirror .selectedCell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--accent-soft);
+  pointer-events: none;
+}
+
+.ProseMirror .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+/* Syntax highlighting, driven by lowlight's hljs class names.
+   Every colour reads a --syn-* variable so a palette can restate the set —
+   which is how Mono stays greyscale instead of erupting in purple and orange
+   in the middle of a theme whose whole point is that nothing competes with the
+   text. Light and dark values live in theme.css beside the rest of the
+   palette; before this, light mode silently used half of the dark set. */
+.ProseMirror pre .hljs-comment,
+.ProseMirror pre .hljs-quote {
+  color: var(--syn-comment);
+  font-style: italic;
+}
+
+.ProseMirror pre .hljs-keyword,
+.ProseMirror pre .hljs-selector-tag,
+.ProseMirror pre .hljs-literal,
+.ProseMirror pre .hljs-type {
+  color: var(--syn-keyword);
+}
+
+.ProseMirror pre .hljs-string,
+.ProseMirror pre .hljs-regexp,
+.ProseMirror pre .hljs-addition {
+  color: var(--syn-string);
+}
+
+.ProseMirror pre .hljs-number,
+.ProseMirror pre .hljs-built_in,
+.ProseMirror pre .hljs-attr {
+  color: var(--syn-number);
+}
+
+.ProseMirror pre .hljs-title,
+.ProseMirror pre .hljs-section,
+.ProseMirror pre .hljs-function {
+  color: var(--syn-title);
+}
+
+.ProseMirror pre .hljs-name,
+.ProseMirror pre .hljs-tag,
+.ProseMirror pre .hljs-deletion {
+  color: var(--syn-name);
+}

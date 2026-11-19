@@ -26,3 +26,7 @@ dist-ssr
 .impeccable/
 DESIGN.md
 PRODUCT.md
+
+# Browser tests
+test-results/
+playwright-report/

@@ -237,6 +237,55 @@ export function createApp(rawEnv = process.env, { log = console.log, warn = cons
     return false
   }
 
+  // ---- /api/library/events -----------------------------------------------------
+  // A stream of server-sent events telling an open app that an agent changed
+  // the library, so it refreshes at once rather than on its next poll. Read
+  // with fetch, not EventSource, because EventSource can't send the
+  // X-Deckle-App header every library route requires. Each message is only a
+  // nudge — the event's time — and the app re-reads the activity log itself.
+
+  /** Open streams. Capped so a misbehaving client can't hold every socket. */
+  const streams = new Set()
+  const MAX_STREAMS = 64
+  const HEARTBEAT_MS = 25_000
+
+  function openEventStream(req, res) {
+    if (streams.size >= MAX_STREAMS) {
+      sendJson(res, 503, { error: 'too many open event streams' }, { 'Retry-After': '30' })
+      return
+    }
+    res.writeHead(200, {
+      ...SECURITY_HEADERS,
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store',
+      Connection: 'keep-alive',
+      // Tell nginx and friends not to buffer the stream.
+      'X-Accel-Buffering': 'no',
+    })
+    res.write('retry: 5000\n: connected\n\n')
+    const unsubscribe = activity.subscribe((event) => {
+      res.write(`event: activity\ndata: ${JSON.stringify({ at: event.at })}\n\n`)
+    })
+    // Proxies close connections that go quiet; a comment line keeps it open.
+    const heartbeat = setInterval(() => res.write(': ping\n\n'), HEARTBEAT_MS)
+    heartbeat.unref?.()
+    const stream = { res, close }
+    streams.add(stream)
+    function close() {
+      if (!streams.delete(stream)) return
+      clearInterval(heartbeat)
+      unsubscribe()
+      res.end()
+    }
+    req.on('close', close)
+    res.on('error', close)
+  }
+
+  /** End every open stream, so a shutdown isn't held open by them. */
+  function closeStreams() {
+    for (const stream of [...streams]) stream.close()
+  }
+
   // ---- /api/library ----------------------------------------------------------
 
   async function handleLibraryRoutes(req, res, url) {
@@ -267,6 +316,10 @@ export function createApp(rawEnv = process.env, { log = console.log, warn = cons
     const route = `${req.method} ${url.pathname}`
 
     switch (route) {
+      case 'GET /api/library/events':
+        openEventStream(req, res)
+        return true
+
       case 'GET /api/library/tree':
         sendJson(res, 200, { tree: await library.tree(rel) })
         return true
@@ -462,5 +515,5 @@ export function createApp(rawEnv = process.env, { log = console.log, warn = cons
     }
   }
 
-  return { server, handler, config, init, logStartup }
+  return { server, handler, config, init, logStartup, closeStreams }
 }

@@ -1,44 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  Activity,
-  Bookmark,
-  Columns2,
-  FileDown,
-  FolderInput,
-  FolderKanban,
-  FolderOpen,
-  FolderPlus,
-  History,
-  Info,
-  ListTodo,
-  Maximize2,
-  Minimize2,
-  Moon,
-  Package,
-  Palette,
-  Plus,
-  Server,
-  Sun,
-  Trash2,
-  Keyboard,
-  Upload,
-  X,
-} from 'lucide-react'
+import { Minimize2 } from 'lucide-react'
 import type { Editor as TiptapEditor } from '@tiptap/react'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
-import CommandPalette, { type Command } from './components/CommandPalette'
+import CommandPalette from './components/CommandPalette'
+import { buildCommands } from './lib/paletteCommands'
 import TrashModal from './components/TrashModal'
 import ExportModal from './components/ExportModal'
 import HistoryModal from './components/HistoryModal'
+import CompareModal, { type CompareRequest } from './components/CompareModal'
 import ConfirmDialog, { type ConfirmRequest } from './components/ConfirmDialog'
 import ThemePicker from './components/ThemePicker'
 import ResizeCrew from './components/ResizeCrew'
-import { EASTER_EGG_KEYWORDS } from './themes/themes'
 import TaskPanel, { type PanelTab } from './components/TaskPanel'
 import ProjectsView from './components/ProjectsView'
 import ActivityView from './components/ActivityView'
 import { useActivity } from './activity/useActivity'
+import { useReview } from './activity/useReview'
+import type { ActivityEvent } from './activity/activity'
+import { readSnapshot } from './fs/history'
+import { timeAgo } from './lib/format'
 import { lastEventFor } from './activity/activity'
 import { useProjects } from './projects/useProjects'
 import {
@@ -54,28 +35,15 @@ import AboutModal, { type StorageKind } from './components/AboutModal'
 import { useTasks } from './tasks/useTasks'
 import { useBookmarks } from './bookmarks/useBookmarks'
 import { domainOf, findUrl, normalizeUrl } from './bookmarks/url'
-import {
-  blockActions,
-  formatActions,
-  headingActions,
-  listActions,
-} from './components/formatActions'
 import { deriveTitleFromMarkdown, isGeneratedTitle } from './lib/format'
 import { MOD_KEY } from './lib/platform'
 import { exportToPdf } from './lib/exportPdf'
 import { downloadMarkdown } from './lib/exportMarkdown'
 import { serialize } from './editor/markdown'
-import {
-  selectionFromDataTransfer,
-  selectionFromFiles,
-  type ImportSelection,
-  type ReadProgress,
-} from './lib/importMarkdown'
-import ImportModal, {
-  type ImportOutcome,
-  type ImportPending,
-  type ImportProgress,
-} from './components/ImportModal'
+import ImportModal from './components/ImportModal'
+import { useImport } from './hooks/useImport'
+import { useToast } from './hooks/useToast'
+import { useGlobalShortcuts } from './hooks/useGlobalShortcuts'
 import MoveNoteModal from './components/MoveNoteModal'
 import { useTheme } from './hooks/useTheme'
 import { downloadBlob } from './lib/zip'
@@ -85,22 +53,8 @@ import type { EnterFrom, FlightOrigin } from './lib/motion'
 import { useBacklinks } from './hooks/useBacklinks'
 import { useResizable } from './hooks/useResizable'
 import { useDeferredUnmount } from './hooks/useDeferredUnmount'
-import { useEnterExit } from './hooks/useEnterExit'
 import { COMPACT_QUERY, useMediaQuery } from './hooks/useMediaQuery'
 import { supportsDiskPicker } from './fs/library'
-
-/**
- * True when the keystroke belongs to whatever the user is writing in.
- *
- * The editor is a contenteditable, so `isContentEditable` matters as much as
- * the input tags — without it, typing "?" in a note would open a dialog.
- */
-function isTypingTarget(): boolean {
-  const el = document.activeElement as HTMLElement | null
-  if (!el) return false
-  if (el.isContentEditable) return true
-  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
-}
 
 /** `webkitdirectory` is how every browser exposes folder picking, but it isn't
  *  in React's typed attribute list — assert it once here rather than at each use. */
@@ -292,6 +246,9 @@ export default function App() {
   // log and reloads the tree and any open note when it moves, so a file an
   // agent saves appears without anyone refreshing the page.
   const activity = useActivity(libraryDir, libraryName, reload)
+  // Which of the agents' writes the person has signed off, kept in the library.
+  const review = useReview(libraryDir, activity.events)
+  const [compare, setCompare] = useState<CompareRequest | null>(null)
 
   // Projects: the folders in Projects/ (or wherever the server was told).
   const projectsDir =
@@ -299,29 +256,8 @@ export default function App() {
   const projects = useProjects(libraryDir, tree, projectsDir)
 
   // Transient confirmation toast (e.g. after capturing a task).
-  const [toast, setToast] = useState<string | null>(null)
-  const [toastTone, setToastTone] = useState<'default' | 'danger'>('default')
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const showToast = useCallback(
-    (msg: string, tone: 'default' | 'danger' = 'default') => {
-      setToast(msg)
-      setToastTone(tone)
-      if (toastTimer.current) clearTimeout(toastTimer.current)
-      // A confirmation can go as soon as it's been read; a failure is a whole
-      // sentence naming a thing to fix, and needs long enough to finish it.
-      toastTimer.current = setTimeout(
-        () => setToast(null),
-        tone === 'danger' ? 7000 : 2200,
-      )
-    },
-    [],
-  )
-  // Held past the dismissal so the toast can animate back down.
-  const toastAnim = useEnterExit(toast !== null, 180)
-  const [toastText, setToastText] = useState('')
-  useEffect(() => {
-    if (toast) setToastText(toast)
-  }, [toast])
+  const toast = useToast()
+  const showToast = toast.showToast
 
   // ---- Naming a note after its own heading ----
   // Set for the length of a rename, so the pane that re-keys underneath it
@@ -408,219 +344,40 @@ export default function App() {
   }, [editor, bookmarks, activeId, showToast])
 
   // ---- Import / export ----
-  // The file inputs live here rather than in the sidebar so the command palette
-  // can open the same pickers.
-  const fileInput = useRef<HTMLInputElement>(null)
-  const folderInput = useRef<HTMLInputElement>(null)
   const [exportOpen, setExportOpen] = useState(false)
-
-  const openPicker = useCallback((input: HTMLInputElement | null) => {
-    if (!input) return
-    // Clear first, so picking the same file twice in a row still fires change.
-    input.value = ''
-    input.click()
-  }, [])
-
-  const openImport = useCallback(() => openPicker(fileInput.current), [openPicker])
-  const openFolderImport = useCallback(
-    () => openPicker(folderInput.current),
-    [openPicker],
-  )
-
-  // An import reports itself in a modal rather than a toast: it has two phases,
-  // it can take a while on a folder or an archive, and when it goes wrong the
-  // interesting part is *which files* went wrong — none of which fits in a
-  // sentence that disappears after two seconds.
-  const [importOpen, setImportOpen] = useState(false)
-  const [importProgress, setImportProgress] = useState<ImportProgress | null>(null)
-  const [importOutcome, setImportOutcome] = useState<ImportOutcome | null>(null)
-  const [importError, setImportError] = useState<string | null>(null)
-  // Files that have been read and are waiting to be told where to go. Held here
-  // rather than in the modal because they are the import itself, and a dialog
-  // that owned them would lose them the moment it unmounted.
-  const [importSelection, setImportSelection] = useState<ImportSelection | null>(null)
-
-  const onReadProgress = useCallback<ReadProgress>((done, total, label) => {
-    setImportProgress({ phase: 'reading', done, total, label })
-  }, [])
-
-  /** The writing half: everything from here on touches the library. */
-  const writeSelection = useCallback(
-    async (selection: ImportSelection, targetFolder: string) => {
-      setImportSelection(null)
-      try {
-        const total = selection.items.length
-        setImportProgress({ phase: 'writing', done: 0, total })
-        // One render per file would cost more than the write does on a large
-        // import, and no one can read a counter moving that fast anyway.
-        const step = Math.max(1, Math.floor(total / 100))
-        const imported = await importNotes(
-          selection.items,
-          targetFolder,
-          (done, count) => {
-            if (done === count || done % step === 0) {
-              setImportProgress({ phase: 'writing', done, total: count })
-            }
-          },
-        )
-
-        setImportProgress(null)
-        setImportOutcome({
-          imported: imported.length,
-          renamed: imported.filter((n) => n.renamed).length,
-          skipped: selection.skipped,
-          folder: targetFolder,
-        })
-      } catch (err) {
-        setImportProgress(null)
-        setImportError(
-          err instanceof Error ? err.message : 'Something went wrong during the import.',
-        )
-      }
-    },
-    [importNotes],
-  )
-
-  /**
-   * Read a selection, then write it.
-   *
-   * `targetFolder` of `null` means "ask": the files are read, and the modal
-   * offers the library's folders before anything is written. A drop already
-   * named its destination by landing on a folder, so it passes one and goes
-   * straight through.
-   */
-  const runImport = useCallback(
-    async (pending: Promise<ImportSelection>, targetFolder: string | null) => {
-      setImportOutcome(null)
-      setImportError(null)
-      setImportSelection(null)
-      setImportProgress({ phase: 'reading', done: 0, total: 0 })
-      setImportOpen(true)
-      if (compact) closeOverlays()
-      else closeSidebar()
-
-      let selection: ImportSelection
-      try {
-        selection = await pending
-      } catch (err) {
-        setImportProgress(null)
-        setImportError(
-          err instanceof Error ? err.message : 'Something went wrong during the import.',
-        )
-        return
-      }
-
-      setImportProgress(null)
-
-      if (!selection.items.length) {
-        setImportOutcome({ imported: 0, renamed: 0, skipped: selection.skipped })
-        return
-      }
-
-      if (targetFolder === null) {
-        setImportSelection(selection)
-        return
-      }
-
-      await writeSelection(selection, targetFolder)
-    },
-    [writeSelection, closeSidebar, closeOverlays, compact],
-  )
-
-  const handleImportFiles = useCallback(
-    (files: FileList | File[]) => {
-      void runImport(selectionFromFiles(files, onReadProgress), null)
-    },
-    [runImport, onReadProgress],
-  )
-
-  // `webkitGetAsEntry` is only valid while the drop event is being dispatched,
-  // so selectionFromDataTransfer reads the entries synchronously before its
-  // first await — don't defer this call.
-  const handleDropFiles = useCallback(
-    (transfer: DataTransfer, targetFolder: string) => {
-      void runImport(selectionFromDataTransfer(transfer, onReadProgress), targetFolder)
-    },
-    [runImport, onReadProgress],
-  )
-
-  /** What the destination step is choosing for, in numbers. */
-  const importPending = useMemo<ImportPending | null>(
-    () =>
-      importSelection
-        ? {
-            notes: importSelection.items.length,
-            skipped: importSelection.skipped.length,
-            nested: importSelection.items.some((i) => i.path.includes('/')),
-          }
-        : null,
-    [importSelection],
-  )
-
-  const closeImport = useCallback(() => {
-    setImportOpen(false)
-    // Cancelling at the destination step throws the read files away — nothing
-    // was written, so there is nothing to keep.
-    setImportSelection(null)
-  }, [])
+  const getDrawersOutOfTheWay = useCallback(() => {
+    if (compact) closeOverlays()
+    else closeSidebar()
+  }, [compact, closeOverlays, closeSidebar])
+  const importer = useImport(importNotes, getDrawersOutOfTheWay)
+  const { openImport, openFolderImport } = importer
 
   // Keyboard shortcuts: Ctrl/Cmd+K opens the palette, Ctrl/Cmd+Shift+F toggles
   // focus, Ctrl/Cmd+\ splits, Escape exits focus.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey
-      if (mod && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        setPaletteOpen((o) => !o)
-      } else if (mod && e.key === '\\') {
-        e.preventDefault()
-        toggleSplit()
-      } else if (mod && e.shiftKey && e.key.toLowerCase() === 'f') {
-        e.preventDefault()
-        toggleFocus()
-      } else if (mod && e.shiftKey && e.key.toLowerCase() === 'a') {
-        // Capture the selection as a task; with no selection, toggle the panel.
-        e.preventDefault()
-        if (!captureSelectionTask()) toggleTasks()
-      } else if (e.key === '?' && !mod && !isTypingTarget()) {
-        // Guarded hard: a question mark is a character before it is a command,
-        // and the editor must never lose one to a dialog.
-        e.preventDefault()
-        setShortcutsOpen(true)
-      } else if (mod && e.shiftKey && e.key.toLowerCase() === 'w') {
-        // Close the focused tab. Deliberately NOT plain Ctrl/Cmd+W: browsers
-        // reserve that one and ignore preventDefault, so binding it closed the
-        // whole app — taking any buffered keystrokes with it.
-        e.preventDefault()
-        if (activeId) closeTab(activeId)
-      } else if (e.key === 'Escape') {
-        // Close the topmost layer first; only exit focus mode if nothing is open.
-        // (The command palette and confirm dialog handle their own Escape.)
-        if (historyOpen) setHistoryOpen(false)
-        else if (trashOpen) setTrashOpen(false)
-        // On a phone the drawers are the topmost layer, so they go before
-        // focus mode does.
-        else if (compact && (sidebarOpen || tasksOpen)) {
-          closeOverlays()
-        } else setFocusMode(false)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [
-    toggleFocus,
+  useGlobalShortcuts({
+    togglePalette: () => setPaletteOpen((o) => !o),
     toggleSplit,
-    trashOpen,
-    historyOpen,
-    captureSelectionTask,
-    toggleTasks,
-    closeTab,
-    activeId,
-    compact,
-    sidebarOpen,
-    tasksOpen,
-    closeOverlays,
-  ])
+    toggleFocus,
+    // Capture the selection as a task; with no selection, toggle the panel.
+    captureTask: () => {
+      if (!captureSelectionTask()) toggleTasks()
+    },
+    showShortcuts: () => setShortcutsOpen(true),
+    closeTab: () => {
+      if (activeId) closeTab(activeId)
+    },
+    escape: () => {
+      // Close the topmost layer first; only exit focus mode if nothing is open.
+      // (The command palette and confirm dialog handle their own Escape.)
+      if (compare) setCompare(null)
+      else if (historyOpen) setHistoryOpen(false)
+      else if (trashOpen) setTrashOpen(false)
+      // On a phone the drawers are the topmost layer, so they go before
+      // focus mode does.
+      else if (compact && (sidebarOpen || tasksOpen)) closeOverlays()
+      else setFocusMode(false)
+    },
+  })
 
   // ---- Note-switch choreography ----
   // Both are set at the click, not in an effect afterwards: the pane remounts in
@@ -821,6 +578,25 @@ export default function App() {
     },
     [projects, openProject, showToast],
   )
+  /** An agent's change to a note: the version it replaced, against the note now. */
+  const compareEvent = useCallback(
+    (event: ActivityEvent) => {
+      const path = event.to ?? event.path
+      if (!libraryDir || !event.before || !path) return
+      const dir = libraryDir
+      const before = event.before
+      setCompare({
+        title: `${path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/i, '')} — ${event.actor} ${event.action} it ${timeAgo(event.at)}`,
+        beforeLabel: `Before ${event.actor}'s change`,
+        afterLabel: 'Now',
+        loadBefore: () => readSnapshot(dir, before),
+        loadAfter: () => readNoteFromLibrary(dir, path),
+        onOpen: () => handleSelect(path),
+      })
+    },
+    [libraryDir, handleSelect],
+  )
+
   const handleSetProjectStatus = useCallback(
     (project: Project, status: Parameters<typeof setProjectStatus>[2]) => {
       if (!libraryDir) return
@@ -845,252 +621,43 @@ export default function App() {
   )
 
   // ---- Command palette actions ----
-  const commands = useMemo<Command[]>(() => {
-    const list: Command[] = [
-      {
-        id: 'new-note',
-        label: 'New note',
-        icon: Plus,
-        keywords: 'create add file',
-        run: () => void createNote(),
-      },
-      {
-        id: 'new-folder',
-        label: 'New folder',
-        icon: FolderPlus,
-        keywords: 'create directory',
-        // Naming happens inline in the tree, so open the sidebar to show it.
-        run: () => setSidebarOpen(true),
-      },
-      {
-        id: 'split',
-        label: splitId ? 'Close split view' : 'Split editor',
-        icon: Columns2,
-        hint: 'Ctrl/Cmd+\\',
-        keywords: 'split pane side by side compare two',
-        run: toggleSplit,
-      },
-      {
-        id: 'focus',
-        label: 'Toggle focus mode',
-        icon: Maximize2,
-        hint: 'Ctrl/Cmd+Shift+F',
-        keywords: 'zen distraction free writing',
-        run: toggleFocus,
-      },
-      {
-        id: 'theme',
-        label: theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode',
-        icon: theme === 'dark' ? Sun : Moon,
-        keywords: 'theme appearance dark light mode',
-        run: () => toggleTheme(),
-      },
-      {
-        id: 'appearance',
-        label: 'Appearance & themes…',
-        icon: Palette,
-        keywords: 'theme colour color palette appearance skin style look',
-        run: () => setThemePickerOpen(true),
-      },
-      {
-        id: 'open-folder',
-        label: supportsDiskPicker()
-          ? 'Open a different folder'
-          : 'Use the library in this browser',
-        icon: FolderOpen,
-        keywords: 'library switch change local folder',
-        run: () => void connect(),
-      },
-      {
-        id: 'open-trash',
-        label: 'Open Recycle Bin',
-        icon: Trash2,
-        keywords: 'trash deleted bin restore',
-        run: () => void openTrash(),
-      },
-      {
-        id: 'import-md',
-        label: 'Import files or a ZIP…',
-        icon: Upload,
-        keywords: 'import upload md markdown pdf image document spreadsheet zip archive add files migrate unzip',
-        run: openImport,
-      },
-      {
-        id: 'import-folder',
-        label: 'Import a folder',
-        icon: FolderOpen,
-        keywords: 'import upload folder directory bulk migrate restore',
-        run: openFolderImport,
-      },
-      {
-        id: 'export-zip',
-        label: 'Export knowledge base as ZIP',
-        icon: Package,
-        keywords: 'export download backup zip archive everything library',
-        run: () => setExportOpen(true),
-      },
-      {
-        id: 'projects',
-        label: 'Projects',
-        icon: FolderKanban,
-        keywords: 'projects work agent hermes status overview folders',
-        run: toggleProjects,
-      },
-      {
-        id: 'activity',
-        label: 'Agent activity',
-        icon: Activity,
-        keywords: 'activity log agent hermes changes recent new review feed history api mcp',
-        run: toggleActivity,
-      },
-      {
-        id: 'toggle-tasks',
-        label: 'Toggle tasks',
-        icon: ListTodo,
-        hint: 'Ctrl/Cmd+Shift+A',
-        keywords: 'todo task planner inbox today upcoming calendar',
-        run: toggleTasks,
-      },
-      {
-        id: 'toggle-bookmarks',
-        label: 'Toggle bookmarks',
-        icon: Bookmark,
-        keywords: 'bookmark url link page product saved collection',
-        run: toggleBookmarks,
-      },
-      {
-        id: 'shortcuts',
-        label: 'Keyboard shortcuts',
-        icon: Keyboard,
-        hint: '?',
-        keywords: 'keys keyboard shortcuts bindings help reference cheatsheet',
-        run: () => setShortcutsOpen(true),
-      },
-      {
-        id: 'about',
-        label: 'About Deckle',
-        icon: Info,
-        keywords: 'about version build release licence license credits info',
-        run: () => setAboutOpen(true),
-      },
-    ]
-
-    // Every unlocked theme is reachable by name, but hidden so six extra rows
-    // don't pad the palette's default list.
-    for (const t of availableThemes) {
-      list.push({
-        id: `theme-${t.id}`,
-        label: `Theme: ${t.name}`,
-        icon: Palette,
-        section: 'Appearance',
-        keywords: `theme colour color palette appearance ${t.name}`,
-        hidden: true,
-        run: () => setPalette(t.id),
-      })
-    }
-
-    // The one you have to go looking for. Once found it joins the picker and
-    // the list above, so this only exists while it's still a secret.
-    if (!availableThemes.some((t) => t.id === 'springfield')) {
-      list.push({
-        id: 'unlock-springfield',
-        label: '🍩 Mmm… a theme you were not supposed to find',
-        icon: Palette,
-        section: 'Appearance',
-        keywords: EASTER_EGG_KEYWORDS,
-        hidden: true,
-        run: () => {
-          unlockTheme('springfield')
-          showToast('Woo-hoo! Springfield theme unlocked')
-        },
-      })
-    }
-
-    // Only offered where a server library actually exists (Docker deployments
-    // with a volume mounted).
-    if (serverLibrary) {
-      list.push({
-        id: 'server-library',
-        label: usingServerLibrary
-          ? serverLibrary.authRequired
-            ? 'Sign out of the server library'
-            : 'Leave the server library'
-          : 'Switch to the server library',
-        icon: Server,
-        keywords: 'server library docker remote sign out log out switch hosted',
-        run: () =>
-          usingServerLibrary ? void signOutServer() : connectServer(),
-      })
-    }
-
-    if (activeNote) {
-      list.push({
-        id: 'close-tab',
-        label: 'Close tab',
-        icon: X,
-        // Advertised here because the shortcut is deliberately not the browser's
-        // Ctrl/Cmd+W, so nobody will guess it.
-        hint: 'Ctrl/Cmd+Shift+W',
-        keywords: 'close tab hide note dismiss',
-        run: () => closeTab(activeNote.id),
-      })
-      list.push({
-        id: 'move-note',
-        label: 'Move current note to another folder…',
-        icon: FolderInput,
-        keywords: 'move relocate folder organise organize file into put',
-        run: () => setMovingId(activeNote.id),
-      })
-      list.push({
-        id: 'history',
-        label: 'Version history',
-        icon: History,
-        keywords: 'versions snapshots restore undo backup',
-        run: () => void openHistory(),
-      })
-      list.push({
-        id: 'export-pdf',
-        label: 'Export current note to PDF',
-        icon: FileDown,
-        keywords: 'print save pdf',
-        run: () => exportToPdf(activeNote.title),
-      })
-      list.push({
-        id: 'delete-note',
-        label: 'Move current note to Recycle Bin',
-        icon: Trash2,
-        keywords: 'remove trash delete bin',
-        run: () => handleDelete(activeNote.id),
-      })
-    }
-
-    // Formatting commands act on the live editor (only when one is mounted).
-    if (editor) {
-      list.push({
-        id: 'bookmark-selection',
-        label: 'Save selection as bookmark',
-        icon: Bookmark,
-        keywords: 'bookmark link url save page product',
-        run: captureSelectionBookmark,
-      })
-      for (const action of [
-        ...headingActions,
-        ...formatActions,
-        ...listActions,
-        ...blockActions,
-      ]) {
-        list.push({
-          id: `fmt-${action.name}`,
-          label: action.label,
-          icon: action.Icon,
-          section: 'Formatting',
-          keywords: 'format style text',
-          run: () => action.run(editor),
-        })
-      }
-    }
-
-    return list
+  const commands = useMemo(() => {
+    return buildCommands({
+      createNote,
+      setSidebarOpen,
+      splitId,
+      toggleSplit,
+      toggleFocus,
+      theme,
+      toggleTheme,
+      setThemePickerOpen,
+      connect,
+      openTrash,
+      openImport,
+      openFolderImport,
+      setExportOpen,
+      toggleProjects,
+      toggleActivity,
+      toggleTasks,
+      toggleBookmarks,
+      setShortcutsOpen,
+      setAboutOpen,
+      availableThemes,
+      setPalette,
+      unlockTheme,
+      showToast,
+      serverLibrary,
+      usingServerLibrary,
+      signOutServer,
+      connectServer,
+      activeNote,
+      closeTab,
+      setMovingId,
+      openHistory,
+      handleDelete,
+      editor,
+      captureSelectionBookmark,
+    })
   }, [
     createNote,
     toggleSplit,
@@ -1175,7 +742,7 @@ export default function App() {
           onOpenBookmarks={toggleBookmarks}
           onOpenImport={openImport}
           onOpenFolderImport={openFolderImport}
-          onDropFiles={handleDropFiles}
+          onDropFiles={importer.dropFiles}
           onOpenExport={() => setExportOpen(true)}
         />
         <div {...sidebarResize.handleProps} aria-label="Resize note list" />
@@ -1214,6 +781,8 @@ export default function App() {
               kindAt={kindAt}
               onOpen={handleSelect}
               onOpenProject={openProjectByName}
+              review={review}
+              onCompare={compareEvent}
             />
           }
         />
@@ -1335,37 +904,39 @@ export default function App() {
           folder. Owned here so both the sidebar and the command palette can
           open them. */}
       <input
-        ref={fileInput}
+        ref={importer.fileInput}
         type="file"
         multiple
         className="visually-hidden"
+        aria-label="Import files"
+        tabIndex={-1}
         onChange={(e) => {
-          if (e.target.files?.length) handleImportFiles(e.target.files)
+          if (e.target.files?.length) importer.importFiles(e.target.files)
         }}
       />
       <input
-        ref={folderInput}
+        ref={importer.folderInput}
         type="file"
         multiple
         className="visually-hidden"
+        aria-label="Import a folder"
+        tabIndex={-1}
         {...DIRECTORY_PROPS}
         onChange={(e) => {
-          if (e.target.files?.length) handleImportFiles(e.target.files)
+          if (e.target.files?.length) importer.importFiles(e.target.files)
         }}
       />
 
       <ImportModal
-        open={importOpen}
-        progress={importProgress}
-        pending={importPending}
-        outcome={importOutcome}
-        error={importError}
+        open={importer.dialog.open}
+        progress={importer.dialog.progress}
+        pending={importer.dialog.pending}
+        outcome={importer.dialog.outcome}
+        error={importer.dialog.error}
         tree={tree}
         libraryName={libraryName}
-        onImportInto={(folder) => {
-          if (importSelection) void writeSelection(importSelection, folder)
-        }}
-        onClose={closeImport}
+        onImportInto={importer.importInto}
+        onClose={importer.close}
       />
 
       <MoveNoteModal
@@ -1377,6 +948,8 @@ export default function App() {
         onMove={(folder) => movingNote && handleMoveNote(movingNote.id, folder)}
         onClose={() => setMovingId(null)}
       />
+
+      <CompareModal request={compare} onClose={() => setCompare(null)} />
 
       <HistoryModal
         open={historyOpen}
@@ -1435,14 +1008,14 @@ export default function App() {
 
       <InkFilter />
 
-      {toastAnim.render && (
+      {toast.anim.render && (
         <div
-          className={`toast${toastAnim.entered ? ' entered' : ''}${
-            toastTone === 'danger' ? ' danger' : ''
+          className={`toast${toast.anim.entered ? ' entered' : ''}${
+            toast.tone === 'danger' ? ' danger' : ''
           }`}
-          role={toastTone === 'danger' ? 'alert' : 'status'}
+          role={toast.tone === 'danger' ? 'alert' : 'status'}
         >
-          {toastText}
+          {toast.text}
         </div>
       )}
     </div>
